@@ -4,6 +4,8 @@ import { useState, useEffect, useReducer, useCallback, useRef } from 'react'
 import ChatPanel from '@/components/ChatPanel'
 import QuickActionsBar from '@/components/QuickActionsBar'
 import CalendarWidget from '@/components/CalendarWidget'
+import ErrorBoundary from '@/components/ErrorBoundary'
+import Toast, { useToast } from '@/components/Toast'
 
 // Types
 interface Todo {
@@ -78,6 +80,7 @@ export default function Dashboard() {
   const [newTaskPriority, setNewTaskPriority] = useState<'high' | 'medium' | 'low'>('medium')
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const chatRef = useRef<{ sendMessage: (msg: string) => void } | null>(null)
+  const { toasts, addToast, dismissToast } = useToast()
 
   // Fetch tasks from API
   const fetchTasks = useCallback(async () => {
@@ -159,6 +162,7 @@ export default function Dashboard() {
     dispatch({ type: 'ADD_TODO', todo: newTodo })
     setNewTaskText('')
     setShowNewTask(false)
+    addToast('Task added successfully', 'success')
     
     try {
       const response = await fetch('/api/tasks', {
@@ -172,6 +176,7 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error('Failed to add task:', error)
+      addToast('Failed to save task', 'error')
     }
   }
 
@@ -191,11 +196,13 @@ export default function Dashboard() {
 
   const handleDeleteTask = async (id: string) => {
     dispatch({ type: 'DELETE_TODO', id })
+    addToast('Task deleted', 'info')
     
     try {
       await fetch(`/api/tasks?id=${id}`, { method: 'DELETE' })
     } catch (error) {
       console.error('Failed to delete task:', error)
+      addToast('Failed to delete task', 'error')
     }
   }
 
@@ -275,6 +282,8 @@ export default function Dashboard() {
 
   return (
     <main className="min-h-screen p-4 md:p-8 lg:p-10">
+      {/* Toast Notifications */}
+      <Toast messages={toasts} onDismiss={dismissToast} />
       {/* Header */}
       <header className="mb-8 animate-fade-in">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
@@ -607,7 +616,9 @@ export default function Dashboard() {
 
           {/* Upcoming Events - Calendar Widget */}
           <div className={`animate-slide-up animate-delay-300 ${activeSection === 'responses' ? 'hidden lg:block' : ''}`}>
-            <CalendarWidget />
+            <ErrorBoundary>
+              <CalendarWidget />
+            </ErrorBoundary>
           </div>
         </div>
 

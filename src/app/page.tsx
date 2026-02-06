@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useReducer, useCallback } from 'react'
+import { useState, useEffect, useReducer } from 'react'
+import ChatPanel from '@/components/ChatPanel'
 
 // Types
 interface Todo {
@@ -89,6 +90,7 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<FilterType>('all')
   const [draggedItem, setDraggedItem] = useState<number | null>(null)
   const [activeSection, setActiveSection] = useState<'tasks' | 'responses' | 'events'>('tasks')
+  const [isChatOpen, setIsChatOpen] = useState(false)
 
   useEffect(() => {
     setMounted(true)
@@ -378,7 +380,7 @@ export default function Dashboard() {
               </span>
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {pendingResponses.map((item, index) => (
+              {pendingResponses.map((item) => (
                 <div 
                   key={item.id} 
                   className="list-item flex items-center gap-4 group"
@@ -405,7 +407,7 @@ export default function Dashboard() {
               </span>
             </h2>
             <ul className="space-y-3">
-              {upcomingEvents.map((event, index) => (
+              {upcomingEvents.map((event) => (
                 <li 
                   key={event.id} 
                   className="list-item flex items-center gap-4 group"
@@ -492,6 +494,32 @@ export default function Dashboard() {
           <p>Pepper Stark · Chief of Staff to Fitz Light · FlightSuite</p>
         </div>
       </footer>
+
+      {/* Floating Chat Button */}
+      <button
+        onClick={() => setIsChatOpen(true)}
+        className={`
+          fixed bottom-6 right-6 z-30
+          w-14 h-14 rounded-full
+          bg-gradient-to-br from-pepper-accent to-pepper-accentDark
+          text-white shadow-glow
+          flex items-center justify-center
+          hover:scale-110 active:scale-95
+          transition-all duration-200
+          ${isChatOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+        `}
+      >
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+        {/* Notification Badge */}
+        <span className="absolute -top-1 -right-1 w-5 h-5 bg-emerald-500 rounded-full text-xs flex items-center justify-center font-bold">
+          1
+        </span>
+      </button>
+
+      {/* Chat Panel */}
+      <ChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
     </main>
   )
 }

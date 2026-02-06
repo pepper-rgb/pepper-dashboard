@@ -5,6 +5,30 @@ import path from 'path'
 const WORKSPACE_PATH = process.env.OPENCLAW_WORKSPACE || '/Users/pepperstarke/.openclaw/workspace'
 const TASKS_FILE = path.join(WORKSPACE_PATH, 'dashboard-tasks.json')
 
+interface EmailContext {
+  from: string
+  subject: string
+  snippet: string
+  fullBody?: string
+  threadId?: string
+  date: string
+  hasAttachments?: boolean
+}
+
+interface TaskContext {
+  email?: EmailContext
+  calendarEvent?: {
+    title: string
+    time: string
+    attendees?: string[]
+  }
+  person?: {
+    name: string
+    company?: string
+    lastContact?: string
+  }
+}
+
 interface Task {
   id: string
   text: string
@@ -13,9 +37,11 @@ interface Task {
   details?: string
   createdAt: string
   source?: 'memory' | 'manual'
+  type?: 'email' | 'calendar' | 'task' | 'response'
+  context?: TaskContext
 }
 
-// Parse the todo markdown file
+// Parse the todo markdown file with context extraction
 async function parseMemoryTodo(): Promise<Task[]> {
   const today = new Date().toISOString().split('T')[0]
   const todoPath = path.join(WORKSPACE_PATH, 'memory', `todo-${today}.md`)
@@ -27,6 +53,9 @@ async function parseMemoryTodo(): Promise<Task[]> {
     const lines = content.split('\n')
     let currentSection = ''
     let currentTask: Partial<Task> | null = null
+    let currentContext: Partial<TaskContext> = {}
+    let emailBody: string[] = []
+    let inEmailBody = false
     
     for (const line of lines) {
       // Section headers
@@ -38,11 +67,17 @@ async function parseMemoryTodo(): Promise<Task[]> {
       // Task headers (### Name)
       if (line.startsWith('### ')) {
         if (currentTask && currentTask.text) {
+          // Finalize email body if we were collecting it
+          if (emailBody.length > 0 && currentContext.email) {
+            currentContext.email.fullBody = emailBody.join('\n').trim()
+          }
+          currentTask.context = Object.keys(currentContext).length > 0 ? currentContext : undefined
           tasks.push(currentTask as Task)
         }
         
         const taskName = line.replace('### ', '').trim()
         const isFollowUp = currentSection.toLowerCase().includes('follow-up')
+        const isEmail = currentSection.toLowerCase().includes('email')
         
         currentTask = {
           id: `memory-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -51,28 +86,94 @@ async function parseMemoryTodo(): Promise<Task[]> {
           priority: isFollowUp ? 'medium' : 'low',
           details: '',
           createdAt: new Date().toISOString(),
-          source: 'memory'
+          source: 'memory',
+          type: isEmail ? 'email' : (isFollowUp ? 'response' : 'task')
         }
+        currentContext = {}
+        emailBody = []
+        inEmailBody = false
         continue
       }
       
-      // Details under current task
+      // Parse context fields
       if (currentTask && line.startsWith('- **')) {
         const detailLine = line.replace(/^- \*\*([^*]+)\*\*:?\s*/, '$1: ')
         currentTask.details = (currentTask.details || '') + detailLine + '\n'
+        
+        // Extract email context
+        const fromMatch = line.match(/- \*\*From\*\*:?\s*(.+)/i)
+        const subjectMatch = line.match(/- \*\*Subject\*\*:?\s*(.+)/i)
+        const whyMatch = line.match(/- \*\*Why\*\*:?\s*(.+)/i)
+        const dateMatch = line.match(/- \*\*Date\*\*:?\s*(.+)/i)
+        const companyMatch = line.match(/- \*\*Company\*\*:?\s*(.+)/i)
+        const contentMatch = line.match(/- \*\*Content\*\*:?\s*(.+)/i)
+        
+        if (fromMatch) {
+          if (!currentContext.email) {
+            currentContext.email = { from: '', subject: '', snippet: '', date: 'Today' }
+          }
+          currentContext.email.from = fromMatch[1].trim()
+          
+          // Also set person context
+          currentContext.person = { name: fromMatch[1].trim() }
+        }
+        
+        if (subjectMatch) {
+          if (!currentContext.email) {
+            currentContext.email = { from: '', subject: '', snippet: '', date: 'Today' }
+          }
+          currentContext.email.subject = subjectMatch[1].trim()
+        }
+        
+        if (whyMatch || contentMatch) {
+          const snippet = (whyMatch || contentMatch)?.[1].trim() || ''
+          if (!currentContext.email) {
+            currentContext.email = { from: '', subject: '', snippet: '', date: 'Today' }
+          }
+          currentContext.email.snippet = snippet
+        }
+        
+        if (dateMatch) {
+          if (currentContext.email) {
+            currentContext.email.date = dateMatch[1].trim()
+          }
+        }
+        
+        if (companyMatch && currentContext.person) {
+          currentContext.person.company = companyMatch[1].trim()
+        }
         
         // Check for priority indicators
         if (line.toLowerCase().includes('critical') || line.toLowerCase().includes('urgent')) {
           currentTask.priority = 'high'
         }
-        if (line.toLowerCase().includes('action needed')) {
+        if (line.toLowerCase().includes('action needed') || line.toLowerCase().includes('needs response')) {
           currentTask.priority = 'medium'
+        }
+      }
+      
+      // Check for email body section
+      if (line.includes('**Email Body**') || line.includes('**Content:**')) {
+        inEmailBody = true
+        continue
+      }
+      
+      // Collect email body lines
+      if (inEmailBody && currentTask) {
+        if (line.startsWith('### ') || line.startsWith('## ')) {
+          inEmailBody = false
+        } else if (line.trim()) {
+          emailBody.push(line.replace(/^>\s*/, '')) // Remove blockquote markers
         }
       }
     }
     
     // Don't forget the last task
     if (currentTask && currentTask.text) {
+      if (emailBody.length > 0 && currentContext.email) {
+        currentContext.email.fullBody = emailBody.join('\n').trim()
+      }
+      currentTask.context = Object.keys(currentContext).length > 0 ? currentContext : undefined
       tasks.push(currentTask as Task)
     }
     
@@ -142,7 +243,9 @@ export async function POST(request: NextRequest) {
       priority: task.priority || 'medium',
       details: task.details || '',
       createdAt: new Date().toISOString(),
-      source: 'manual'
+      source: 'manual',
+      type: task.type || 'task',
+      context: task.context
     }
     
     tasks.push(newTask)

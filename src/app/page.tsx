@@ -10,6 +10,16 @@ import CommandPalette from '@/components/CommandPalette'
 import SettingsPanel from '@/components/SettingsPanel'
 
 // Types
+interface EmailContext {
+  from: string
+  subject: string
+  snippet: string
+  fullBody?: string
+  threadId?: string
+  date: string
+  hasAttachments?: boolean
+}
+
 interface Todo {
   id: string
   text: string
@@ -18,6 +28,20 @@ interface Todo {
   details?: string
   createdAt: string
   source?: 'memory' | 'manual'
+  type?: 'email' | 'calendar' | 'task' | 'response'
+  context?: {
+    email?: EmailContext
+    calendarEvent?: {
+      title: string
+      time: string
+      attendees?: string[]
+    }
+    person?: {
+      name: string
+      company?: string
+      lastContact?: string
+    }
+  }
 }
 
 interface PendingResponse {
@@ -157,6 +181,20 @@ export default function Dashboard() {
   // Quick action handler - opens chat with prefilled message
   const handleQuickAction = useCallback((message: string) => {
     setPendingMessage(message)
+    setIsChatOpen(true)
+  }, [])
+
+  // Ask AI about a specific task
+  const handleAskAboutTask = useCallback((todo: Todo) => {
+    let context = `Regarding task: "${todo.text}"`
+    
+    if (todo.context?.email) {
+      context = `About this email from ${todo.context.email.from} with subject "${todo.context.email.subject}":`
+    } else if (todo.context?.person) {
+      context = `About ${todo.context.person.name}${todo.context.person.company ? ` from ${todo.context.person.company}` : ''}:`
+    }
+    
+    setPendingMessage(context + ' ')
     setIsChatOpen(true)
   }, [])
 
@@ -571,13 +609,108 @@ export default function Dashboard() {
                           
                           {/* Expanded Details */}
                           <div className={`overflow-hidden transition-all duration-300 ${
-                            expandedTodo === todo.id ? 'max-h-40 mt-3 opacity-100' : 'max-h-0 opacity-0'
+                            expandedTodo === todo.id ? 'max-h-[500px] mt-3 opacity-100' : 'max-h-0 opacity-0'
                           }`}>
-                            <div className="p-3 rounded-lg bg-pepper-primary/50 border border-pepper-light/10">
-                              <p className="text-sm text-pepper-muted whitespace-pre-wrap">{todo.details || 'No details'}</p>
-                              <div className="flex items-center gap-4 mt-2 text-xs text-pepper-muted/60">
-                                <span>Created: {new Date(todo.createdAt).toLocaleDateString()}</span>
-                                <span className="text-pepper-accent/60">Double-click to edit</span>
+                            <div className="p-4 rounded-lg bg-pepper-primary/50 border border-pepper-light/10 space-y-3">
+                              {/* Email Context */}
+                              {todo.context?.email && (
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-2 text-xs text-pepper-muted">
+                                    <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400">📧 Email</span>
+                                    <span>{todo.context.email.date}</span>
+                                    {todo.context.email.hasAttachments && (
+                                      <span className="px-2 py-0.5 rounded bg-pepper-light/20">📎</span>
+                                    )}
+                                  </div>
+                                  <div className="text-sm">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <span className="text-pepper-muted">From:</span>
+                                      <span className="text-pepper-text font-medium">{todo.context.email.from}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <span className="text-pepper-muted">Subject:</span>
+                                      <span className="text-pepper-text">{todo.context.email.subject}</span>
+                                    </div>
+                                  </div>
+                                  <div className="p-3 rounded-lg bg-pepper-tertiary border border-pepper-light/10">
+                                    <p className="text-sm text-pepper-text/90 whitespace-pre-wrap leading-relaxed">
+                                      {todo.context.email.fullBody || todo.context.email.snippet}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Person Context */}
+                              {todo.context?.person && !todo.context?.email && (
+                                <div className="flex items-center gap-3 p-3 rounded-lg bg-pepper-tertiary border border-pepper-light/10">
+                                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pepper-light to-pepper-secondary flex items-center justify-center text-pepper-accent font-semibold text-sm">
+                                    {todo.context.person.name.split(' ').map(n => n[0]).join('')}
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-pepper-text">{todo.context.person.name}</div>
+                                    {todo.context.person.company && (
+                                      <div className="text-xs text-pepper-muted">{todo.context.person.company}</div>
+                                    )}
+                                    {todo.context.person.lastContact && (
+                                      <div className="text-xs text-pepper-muted/60">Last contact: {todo.context.person.lastContact}</div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Calendar Event Context */}
+                              {todo.context?.calendarEvent && (
+                                <div className="p-3 rounded-lg bg-pepper-tertiary border border-pepper-light/10">
+                                  <div className="flex items-center gap-2 text-xs text-pepper-muted mb-2">
+                                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">📅 Calendar</span>
+                                    <span>{todo.context.calendarEvent.time}</span>
+                                  </div>
+                                  <div className="font-medium text-pepper-text">{todo.context.calendarEvent.title}</div>
+                                  {todo.context.calendarEvent.attendees && (
+                                    <div className="text-xs text-pepper-muted mt-1">
+                                      {todo.context.calendarEvent.attendees.join(', ')}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Basic Details (fallback) */}
+                              {!todo.context?.email && !todo.context?.person && !todo.context?.calendarEvent && (
+                                <p className="text-sm text-pepper-muted whitespace-pre-wrap">
+                                  {todo.details || 'No additional details'}
+                                </p>
+                              )}
+
+                              {/* Footer with actions */}
+                              <div className="flex items-center justify-between pt-2 border-t border-pepper-light/10">
+                                <div className="text-xs text-pepper-muted/60">
+                                  Created: {new Date(todo.createdAt).toLocaleDateString()}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-pepper-muted/60">Double-click to edit</span>
+                                  {/* Ask AI Button */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleAskAboutTask(todo)
+                                    }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-pepper-accent/20 text-pepper-accent border border-pepper-accent/30 hover:bg-pepper-accent/30 hover:border-pepper-accent/50 transition-all group"
+                                  >
+                                    <svg 
+                                      width="14" 
+                                      height="14" 
+                                      viewBox="0 0 24 24" 
+                                      fill="none" 
+                                      stroke="currentColor" 
+                                      strokeWidth="2"
+                                      className="group-hover:scale-110 transition-transform"
+                                    >
+                                      <circle cx="12" cy="12" r="3" />
+                                      <path d="M12 2v2m0 16v2M2 12h2m16 0h2m-4.2-5.8l1.4-1.4M4.8 19.2l1.4-1.4m0-11.6L4.8 4.8m14.4 14.4l-1.4-1.4" />
+                                    </svg>
+                                    Ask AI
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -587,9 +720,31 @@ export default function Dashboard() {
 
                     {/* Actions */}
                     <div className="flex items-center gap-1">
+                      {/* Ask AI Button - always visible */}
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleAskAboutTask(todo)
+                        }}
+                        className="text-pepper-accent/60 hover:text-pepper-accent transition-colors p-1.5 rounded-lg hover:bg-pepper-accent/10"
+                        title="Ask AI about this task"
+                      >
+                        <svg 
+                          width="16" 
+                          height="16" 
+                          viewBox="0 0 24 24" 
+                          fill="none" 
+                          stroke="currentColor" 
+                          strokeWidth="2"
+                        >
+                          <circle cx="12" cy="12" r="3" />
+                          <path d="M12 2v2m0 16v2M2 12h2m16 0h2m-4.2-5.8l1.4-1.4M4.8 19.2l1.4-1.4m0-11.6L4.8 4.8m14.4 14.4l-1.4-1.4" />
+                        </svg>
+                      </button>
                       <button 
                         onClick={() => toggleExpand(todo.id)}
                         className="text-pepper-muted hover:text-pepper-accent transition-colors p-1"
+                        title="Show details"
                       >
                         <svg 
                           width="16" 

@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 234, 234, 234;
+  --background-start-rgb: 26, 26, 46;
+  --background-end-rgb: 22, 33, 62;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom,
+      rgb(var(--background-start-rgb)),
+      rgb(var(--background-end-rgb))
+    );
+  min-height: 100vh;
+}
+
+.card {
+  @apply bg-pepper-secondary/80 backdrop-blur-sm rounded-xl p-6 border border-pepper-light/20;
+}
+
+.card-header {
+  @apply text-lg font-semibold text-pepper-accent mb-4 flex items-center gap-2;
+}

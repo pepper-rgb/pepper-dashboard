@@ -49,6 +49,7 @@ interface PendingResponse {
   person: string
   topic: string
   since: string
+  context?: string
 }
 
 // Reducer for todos
@@ -172,11 +173,20 @@ export default function Dashboard() {
   }, [])
 
   const pendingResponses: PendingResponse[] = [
-    { id: '1', person: 'Spencer Brill', topic: 'NYC dates for meeting', since: 'Feb 5' },
-    { id: '2', person: 'Sierra Pena', topic: 'Schedule call', since: 'Feb 5' },
-    { id: '3', person: 'Dakota', topic: 'DALE deal counter', since: 'Feb 5' },
-    { id: '4', person: 'Luca Rinaldi', topic: 'Tomorrow schedule', since: 'Feb 5' },
+    { id: '1', person: 'Spencer Brill', topic: 'NYC dates for meeting', since: 'Feb 5', context: 'Spencer Brill is a contact you emailed about meeting up in NYC. Waiting for him to send dates.' },
+    { id: '2', person: 'Sierra Pena', topic: 'Schedule call', since: 'Feb 5', context: 'Sierra Pena reached out interested in FlightSuite. Waiting for her response to schedule a call.' },
+    { id: '3', person: 'Dakota', topic: 'DALE deal counter', since: 'Feb 5', context: 'Dakota from DALE with 17 GHL clients ($4,700 MRR). Sent counter offer: $15k upfront + $5k earnout + 20% expansion revenue.' },
+    { id: '4', person: 'Luca Rinaldi', topic: 'Tomorrow schedule', since: 'Feb 5', context: 'Luca Rinaldi is your team member. Asked about his schedule for tomorrow to plan task assignments.' },
   ]
+
+  // Handle click on pending response card
+  const handleResponseClick = useCallback((response: PendingResponse) => {
+    const message = response.context 
+      ? `About ${response.person} (${response.topic}): ${response.context}\n\nWhat would you like to know or do?`
+      : `What's the status on ${response.person} regarding "${response.topic}"?`
+    setPendingMessage(message)
+    setIsChatOpen(true)
+  }, [])
 
   // Quick action handler - opens chat with prefilled message
   const handleQuickAction = useCallback((message: string) => {
@@ -803,7 +813,8 @@ export default function Dashboard() {
               {pendingResponses.map((item) => (
                 <div 
                   key={item.id} 
-                  className="list-item flex items-center gap-4 group"
+                  onClick={() => handleResponseClick(item)}
+                  className="list-item flex items-center gap-4 group cursor-pointer hover:border-pepper-accent/30 transition-all"
                 >
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pepper-light to-pepper-secondary flex items-center justify-center text-pepper-accent font-semibold text-sm flex-shrink-0 group-hover:shadow-glow transition-shadow">
                     {item.person.split(' ').map(n => n[0]).join('')}
@@ -812,7 +823,16 @@ export default function Dashboard() {
                     <div className="font-medium text-pepper-text truncate">{item.person}</div>
                     <div className="text-sm text-pepper-muted truncate">{item.topic}</div>
                   </div>
-                  <div className="text-xs text-pepper-muted/60 flex-shrink-0">{item.since}</div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="text-xs text-pepper-muted/60">{item.since}</div>
+                    {/* Ask AI indicator */}
+                    <div className="w-6 h-6 rounded-lg bg-pepper-accent/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-pepper-accent">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M12 2v2m0 16v2M2 12h2m16 0h2" />
+                      </svg>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>

@@ -207,7 +207,71 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
                 <div className="w-2 h-2 bg-pepper-accent rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
               </div>
             </div>
-          ) : settings ? (
+          ) : !settings ? (
+            /* Not Connected State */
+            <div className="space-y-6">
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4">
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="text-2xl">🔌</span>
+                  <div>
+                    <h4 className="font-medium text-amber-400">Not Connected to Gateway</h4>
+                    <p className="text-xs text-pepper-muted mt-1">
+                      Settings require a connection to the local OpenClaw gateway
+                    </p>
+                  </div>
+                </div>
+                <div className="text-sm text-pepper-muted space-y-2">
+                  <p>To enable full functionality:</p>
+                  <ol className="list-decimal list-inside space-y-1 text-xs">
+                    <li>Connect Tailscale on your Mac mini</li>
+                    <li>Configure the dashboard to use Tailscale URL</li>
+                    <li>Or access this dashboard from the local network</li>
+                  </ol>
+                </div>
+              </div>
+
+              {/* Show what would be available */}
+              <section className="space-y-3 opacity-50">
+                <h4 className="text-sm font-semibold text-pepper-text flex items-center gap-2">
+                  <span>🌐</span> Gateway Status
+                  <span className="text-xs bg-pepper-light/20 px-2 py-0.5 rounded">Unavailable</span>
+                </h4>
+                <div className="bg-pepper-tertiary rounded-xl p-4 border border-pepper-light/10">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-pepper-muted">Connection</span>
+                    <span className="text-sm text-amber-400">Not Connected</span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-3 opacity-50">
+                <h4 className="text-sm font-semibold text-pepper-text flex items-center gap-2">
+                  <span>📱</span> Allowlist
+                  <span className="text-xs bg-pepper-light/20 px-2 py-0.5 rounded">Unavailable</span>
+                </h4>
+                <div className="bg-pepper-tertiary rounded-xl p-4 border border-pepper-light/10">
+                  <p className="text-sm text-pepper-muted text-center">
+                    Manage allowlist requires gateway connection
+                  </p>
+                </div>
+              </section>
+
+              <button
+                onClick={fetchSettings}
+                className="
+                  w-full py-3 rounded-xl border border-pepper-light/20
+                  text-pepper-muted hover:text-pepper-text hover:border-pepper-light/40
+                  transition-colors flex items-center justify-center gap-2 text-sm
+                "
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M1 8a7 7 0 0 1 13-3.5M15 8a7 7 0 0 1-13 3.5" />
+                  <path d="M14 1v4h-4M2 15v-4h4" />
+                </svg>
+                Retry Connection
+              </button>
+            </div>
+          ) : (
             <>
               {/* Gateway Status Section */}
               <section className="space-y-3">

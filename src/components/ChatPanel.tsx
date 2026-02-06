@@ -12,6 +12,8 @@ interface Message {
 interface ChatPanelProps {
   isOpen: boolean
   onClose: () => void
+  initialMessage?: string | null
+  onMessageSent?: () => void
 }
 
 interface QuickAction {
@@ -27,7 +29,7 @@ const quickActions: QuickAction[] = [
   { label: 'Search', emoji: '🔍', message: 'Search the web for ' },
 ]
 
-export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
+export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSent }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -56,6 +58,14 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       inputRef.current.focus()
     }
   }, [isOpen])
+
+  // Handle initial message from quick actions
+  useEffect(() => {
+    if (isOpen && initialMessage && !isLoading) {
+      sendMessage(initialMessage)
+      onMessageSent?.()
+    }
+  }, [isOpen, initialMessage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check connection status
   useEffect(() => {

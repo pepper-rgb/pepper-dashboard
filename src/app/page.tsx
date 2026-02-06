@@ -1,7 +1,9 @@
 'use client'
 
-import { useState, useEffect, useReducer, useCallback } from 'react'
+import { useState, useEffect, useReducer, useCallback, useRef } from 'react'
 import ChatPanel from '@/components/ChatPanel'
+import QuickActionsBar from '@/components/QuickActionsBar'
+import CalendarWidget from '@/components/CalendarWidget'
 
 // Types
 interface Todo {
@@ -19,13 +21,6 @@ interface PendingResponse {
   person: string
   topic: string
   since: string
-}
-
-interface UpcomingEvent {
-  id: string
-  title: string
-  time: string
-  type: 'meeting' | 'call' | 'deadline'
 }
 
 // Reducer for todos
@@ -81,6 +76,8 @@ export default function Dashboard() {
   const [showNewTask, setShowNewTask] = useState(false)
   const [newTaskText, setNewTaskText] = useState('')
   const [newTaskPriority, setNewTaskPriority] = useState<'high' | 'medium' | 'low'>('medium')
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null)
+  const chatRef = useRef<{ sendMessage: (msg: string) => void } | null>(null)
 
   // Fetch tasks from API
   const fetchTasks = useCallback(async () => {
@@ -139,10 +136,11 @@ export default function Dashboard() {
     { id: '4', person: 'Luca Rinaldi', topic: 'Tomorrow schedule', since: 'Feb 5' },
   ]
 
-  const upcomingEvents: UpcomingEvent[] = [
-    { id: '1', title: 'Janine Hudson / mobi9tech consult', time: 'Tue Feb 10 @ 1:15pm', type: 'meeting' },
-    { id: '2', title: 'Jennie Stones consultation call', time: 'Fri Feb 13 @ 12:30pm', type: 'call' },
-  ]
+  // Quick action handler - opens chat with prefilled message
+  const handleQuickAction = useCallback((message: string) => {
+    setPendingMessage(message)
+    setIsChatOpen(true)
+  }, [])
 
   // API handlers
   const handleAddTask = async () => {
@@ -250,15 +248,6 @@ export default function Dashboard() {
 
   const toggleExpand = (id: string) => {
     setExpandedTodo(expandedTodo === id ? null : id)
-  }
-
-  const getEventIcon = (type: string) => {
-    switch(type) {
-      case 'meeting': return '🤝'
-      case 'call': return '📞'
-      case 'deadline': return '⏰'
-      default: return '📅'
-    }
   }
 
   const getPriorityClass = (priority: string) => {
@@ -616,35 +605,9 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Upcoming Events */}
-          <div className={`glass-card p-6 animate-slide-up animate-delay-300 ${activeSection === 'responses' ? 'hidden lg:block' : ''}`}>
-            <h2 className="card-header">
-              <span>📅</span> Upcoming Events
-              <span className="ml-auto text-sm font-normal text-emerald-500 bg-emerald-500/10 px-2 py-1 rounded-full">
-                {upcomingEvents.length}
-              </span>
-            </h2>
-            <ul className="space-y-3">
-              {upcomingEvents.map((event) => (
-                <li 
-                  key={event.id} 
-                  className="list-item flex items-center gap-4 group"
-                >
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-pepper-accent/20 to-transparent flex items-center justify-center text-xl flex-shrink-0 group-hover:scale-110 transition-transform">
-                    {getEventIcon(event.type)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-pepper-text">{event.title}</div>
-                    <div className="text-sm text-pepper-accent mt-0.5">{event.time}</div>
-                  </div>
-                  <button className="opacity-0 group-hover:opacity-100 transition-opacity text-pepper-muted hover:text-pepper-accent">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <path d="M8 4l6 6-6 6" />
-                    </svg>
-                  </button>
-                </li>
-              ))}
-            </ul>
+          {/* Upcoming Events - Calendar Widget */}
+          <div className={`animate-slide-up animate-delay-300 ${activeSection === 'responses' ? 'hidden lg:block' : ''}`}>
+            <CalendarWidget />
           </div>
         </div>
 
@@ -736,8 +699,22 @@ export default function Dashboard() {
         </span>
       </button>
 
+      {/* Quick Actions Bar */}
+      <QuickActionsBar 
+        onAction={handleQuickAction}
+        className={isChatOpen ? 'opacity-0 pointer-events-none' : ''}
+      />
+
       {/* Chat Panel */}
-      <ChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+      <ChatPanel 
+        isOpen={isChatOpen} 
+        onClose={() => {
+          setIsChatOpen(false)
+          setPendingMessage(null)
+        }}
+        initialMessage={pendingMessage}
+        onMessageSent={() => setPendingMessage(null)}
+      />
     </main>
   )
 }

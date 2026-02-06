@@ -7,6 +7,7 @@ import CalendarWidget from '@/components/CalendarWidget'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import Toast, { useToast } from '@/components/Toast'
 import CommandPalette from '@/components/CommandPalette'
+import SettingsPanel from '@/components/SettingsPanel'
 
 // Types
 interface Todo {
@@ -83,6 +84,7 @@ export default function Dashboard() {
   const chatRef = useRef<{ sendMessage: (msg: string) => void } | null>(null)
   const { toasts, addToast, dismissToast } = useToast()
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   // Fetch tasks from API
   const fetchTasks = useCallback(async () => {
@@ -134,6 +136,7 @@ export default function Dashboard() {
         setShowNewTask(false)
         setEditingId(null)
         setIsCommandPaletteOpen(false)
+        setIsSettingsOpen(false)
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()
@@ -323,21 +326,43 @@ export default function Dashboard() {
             </div>
           </div>
           
-          <div className="glass-card px-6 py-4 flex items-center gap-6">
-            <div className="text-right">
-              <div className="time-display text-3xl md:text-4xl font-light text-pepper-accent glow-text">
-                {currentTime.toLocaleTimeString('en-US', { 
-                  hour: '2-digit', 
-                  minute: '2-digit',
-                  hour12: true 
-                })}
-              </div>
-              <div className="text-sm text-pepper-muted mt-1">
-                {currentTime.toLocaleDateString('en-US', { 
-                  weekday: 'long', 
-                  month: 'short', 
-                  day: 'numeric' 
-                })}
+          <div className="flex items-center gap-3">
+            {/* Settings Button */}
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="glass-card p-3 hover:border-pepper-accent/30 transition-all group"
+              title="Settings"
+            >
+              <svg 
+                width="24" 
+                height="24" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2"
+                className="text-pepper-muted group-hover:text-pepper-accent transition-colors group-hover:rotate-45 transition-transform duration-300"
+              >
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+
+            <div className="glass-card px-6 py-4 flex items-center gap-6">
+              <div className="text-right">
+                <div className="time-display text-3xl md:text-4xl font-light text-pepper-accent glow-text">
+                  {currentTime.toLocaleTimeString('en-US', { 
+                    hour: '2-digit', 
+                    minute: '2-digit',
+                    hour12: true 
+                  })}
+                </div>
+                <div className="text-sm text-pepper-muted mt-1">
+                  {currentTime.toLocaleDateString('en-US', { 
+                    weekday: 'long', 
+                    month: 'short', 
+                    day: 'numeric' 
+                  })}
+                </div>
               </div>
             </div>
           </div>
@@ -767,6 +792,13 @@ export default function Dashboard() {
           setShowNewTask(true)
         }}
         onRefresh={handleRefresh}
+      />
+
+      {/* Settings Panel */}
+      <SettingsPanel
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onToast={addToast}
       />
     </main>
   )

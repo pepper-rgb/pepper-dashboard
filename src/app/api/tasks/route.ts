@@ -199,6 +199,111 @@ async function saveTasks(tasks: Task[]): Promise<void> {
   await fs.writeFile(TASKS_FILE, JSON.stringify(tasks, null, 2))
 }
 
+// Sample tasks for demo/offline mode
+const SAMPLE_TASKS: Task[] = [
+  {
+    id: 'sample-1',
+    text: 'Review Spencer Brill email - NYC meeting dates',
+    completed: false,
+    priority: 'high',
+    createdAt: new Date().toISOString(),
+    source: 'memory',
+    type: 'email',
+    context: {
+      email: {
+        from: 'Spencer Brill <spencer@example.com>',
+        subject: 'Re: NYC Meetup Next Month',
+        snippet: 'Hey Fitz, looking forward to connecting when you\'re in town...',
+        fullBody: 'Hey Fitz,\n\nLooking forward to connecting when you\'re in town. I\'m pretty flexible the week of the 15th - let me know what works for your schedule.\n\nWe could grab lunch at that spot we talked about, or if you prefer something more casual, coffee works too.\n\nLet me know!\n\nSpencer',
+        date: 'Feb 5, 2026',
+        hasAttachments: false
+      },
+      person: {
+        name: 'Spencer Brill',
+        company: 'Brill Ventures',
+        lastContact: 'Feb 5, 2026'
+      }
+    }
+  },
+  {
+    id: 'sample-2',
+    text: 'Respond to Sierra Pena - FlightSuite demo request',
+    completed: false,
+    priority: 'high',
+    createdAt: new Date().toISOString(),
+    source: 'memory',
+    type: 'email',
+    context: {
+      email: {
+        from: 'Sierra Pena <sierra@techstartup.io>',
+        subject: 'Interested in FlightSuite for our sales team',
+        snippet: 'Hi, I came across FlightSuite and think it could be perfect for our growing sales team...',
+        fullBody: 'Hi,\n\nI came across FlightSuite and think it could be perfect for our growing sales team. We\'re currently using HubSpot but the manual data entry is killing our productivity.\n\nWould love to schedule a quick call to learn more about how FlightSuite could help.\n\nBest,\nSierra Pena\nHead of Sales, TechStartup.io',
+        date: 'Feb 5, 2026',
+        hasAttachments: false
+      },
+      person: {
+        name: 'Sierra Pena',
+        company: 'TechStartup.io',
+        lastContact: 'Feb 5, 2026'
+      }
+    }
+  },
+  {
+    id: 'sample-3',
+    text: 'DALE deal - Review Dakota\'s response to counter offer',
+    completed: false,
+    priority: 'high',
+    createdAt: new Date().toISOString(),
+    source: 'memory',
+    type: 'response',
+    context: {
+      person: {
+        name: 'Dakota',
+        company: 'DALE (17 GHL clients, $4.7k MRR)',
+        lastContact: 'Feb 5, 2026'
+      }
+    },
+    details: 'Counter offer sent: $15k upfront + $5k earnout + 20% expansion revenue (uncapped). Waiting for response.'
+  },
+  {
+    id: 'sample-4',
+    text: 'Prepare for Janine Hudson consultation',
+    completed: false,
+    priority: 'medium',
+    createdAt: new Date().toISOString(),
+    source: 'memory',
+    type: 'calendar',
+    context: {
+      calendarEvent: {
+        title: 'Janine Hudson / mobi9tech Consultation',
+        time: 'Tue Feb 10 @ 1:15 PM',
+        attendees: ['Janine Hudson', 'Fitz Light']
+      },
+      person: {
+        name: 'Janine Hudson',
+        company: 'mobi9tech'
+      }
+    }
+  },
+  {
+    id: 'sample-5',
+    text: 'Follow up with Mike Gorski on Copilot feedback',
+    completed: false,
+    priority: 'low',
+    createdAt: new Date().toISOString(),
+    source: 'memory',
+    type: 'response',
+    context: {
+      person: {
+        name: 'Mike Gorski',
+        lastContact: 'Feb 3, 2026'
+      }
+    },
+    details: 'Mike is testing Copilot. Follow up in 3-4 days if no feedback.'
+  }
+]
+
 export async function GET() {
   try {
     const [memoryTasks, savedTasks] = await Promise.all([
@@ -210,18 +315,30 @@ export async function GET() {
     const savedIds = new Set(savedTasks.map(t => t.text.toLowerCase()))
     const newMemoryTasks = memoryTasks.filter(t => !savedIds.has(t.text.toLowerCase()))
     
-    const allTasks = [...savedTasks, ...newMemoryTasks]
+    let allTasks = [...savedTasks, ...newMemoryTasks]
+    
+    // If no tasks from files, use sample data (for Vercel/demo mode)
+    const isDemo = allTasks.length === 0
+    if (isDemo) {
+      allTasks = SAMPLE_TASKS
+    }
     
     return NextResponse.json({
       tasks: allTasks,
       sources: {
         memory: memoryTasks.length,
-        saved: savedTasks.length
+        saved: savedTasks.length,
+        demo: isDemo
       }
     })
   } catch (error) {
     console.error('Error loading tasks:', error)
-    return NextResponse.json({ tasks: [], error: 'Failed to load tasks' }, { status: 500 })
+    // Return sample data on error too
+    return NextResponse.json({ 
+      tasks: SAMPLE_TASKS, 
+      sources: { demo: true },
+      error: 'Using demo data - could not connect to workspace' 
+    })
   }
 }
 

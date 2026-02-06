@@ -4,7 +4,13 @@ import path from 'path'
 
 const CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH || '/Users/pepperstarke/.openclaw/openclaw.json'
 const OPENCLAW_GATEWAY = process.env.OPENCLAW_GATEWAY_URL || 'http://localhost:18789'
-const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || 'b05758372fb889f85e2a4c7fe478e61459d3cc91d17fe06a'
+const OPENCLAW_PASSWORD = process.env.OPENCLAW_PASSWORD || 'PepperDash2026!'
+
+// Create basic auth header
+function getAuthHeader(): string {
+  const credentials = Buffer.from(`admin:${OPENCLAW_PASSWORD}`).toString('base64')
+  return `Basic ${credentials}`
+}
 
 export async function GET() {
   try {
@@ -16,7 +22,7 @@ export async function GET() {
     let gatewayStatus = 'disconnected'
     try {
       const healthCheck = await fetch(`${OPENCLAW_GATEWAY}/api/health`, {
-        headers: { 'Authorization': `Bearer ${OPENCLAW_TOKEN}` },
+        headers: { 'Authorization': getAuthHeader() },
         signal: AbortSignal.timeout(3000)
       })
       gatewayStatus = healthCheck.ok ? 'connected' : 'disconnected'

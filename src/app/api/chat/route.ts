@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 const OPENCLAW_GATEWAY = process.env.OPENCLAW_GATEWAY_URL || 'http://localhost:18789'
-const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || 'b05758372fb889f85e2a4c7fe478e61459d3cc91d17fe06a'
+const OPENCLAW_PASSWORD = process.env.OPENCLAW_PASSWORD || 'PepperDash2026!'
+
+// Create basic auth header
+function getAuthHeader(): string {
+  const credentials = Buffer.from(`admin:${OPENCLAW_PASSWORD}`).toString('base64')
+  return `Basic ${credentials}`
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,7 +26,7 @@ export async function POST(request: NextRequest) {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENCLAW_TOKEN}`
+        'Authorization': getAuthHeader()
       },
       body: JSON.stringify({ 
         message,
@@ -68,7 +74,7 @@ export async function GET(request: NextRequest) {
   try {
     // Check gateway health
     const healthCheck = await fetch(`${OPENCLAW_GATEWAY}/api/health`, {
-      headers: { 'Authorization': `Bearer ${OPENCLAW_TOKEN}` }
+      headers: { 'Authorization': getAuthHeader() }
     }).catch(() => null)
 
     return NextResponse.json({

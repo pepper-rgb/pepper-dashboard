@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { OpenClawClient, ChatMessage } from '@/lib/openclaw-client'
 
 interface Message {
   id: string
@@ -14,6 +15,8 @@ interface ChatPanelProps {
   onClose: () => void
   initialMessage?: string | null
   onMessageSent?: () => void
+  client: OpenClawClient | null
+  connectionStatus: 'checking' | 'connected' | 'disconnected'
 }
 
 interface QuickAction {
@@ -29,21 +32,22 @@ const quickActions: QuickAction[] = [
   { label: 'Search', emoji: '🔍', message: 'Search the web for ' },
 ]
 
-export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSent }: ChatPanelProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      content: "Hey! I'm Pepper, your Chief of Staff. How can I help you today?",
-      role: 'assistant',
-      timestamp: new Date()
-    }
-  ])
+const WELCOME_MESSAGE: Message = {
+  id: 'welcome',
+  content: "Hey! I'm Pepper, your Chief of Staff. How can I help you today?",
+  role: 'assistant',
+  timestamp: new Date()
+}
+
+export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSent, client, connectionStatus }: ChatPanelProps) {
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [connectionStatus, setConnectionStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
   const [showQuickActions, setShowQuickActions] = useState(true)
+  const [streamingText, setStreamingText] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const registeredRef = useRef(false)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -51,11 +55,81 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages])
+  }, [messages, streamingText])
 
   useEffect(() => {
     if (isOpen && inputRef.current) {
       inputRef.current.focus()
+    }
+  }, [isOpen])
+
+  // Register callbacks and switch to dashboard session when panel opens
+  useEffect(() => {
+    if (!isOpen || !client) {
+      registeredRef.current = false
+      return
+    }
+
+    // Avoid re-registering on every render
+    if (registeredRef.current) return
+    registeredRef.current = true
+
+    client.setCallbacks({
+      onChatStream: (text) => {
+        setStreamingText(text)
+        setIsLoading(false)
+      },
+      onChatComplete: (history: ChatMessage[], lastStreamText: string | null) => {
+        // Streaming bug fix: if we have streaming text, promote it to a real message
+        // immediately so the user never sees a flash of empty content while history loads.
+        if (lastStreamText) {
+          setMessages(prev => {
+            // Add the streamed response as a real message right away
+            const hasIt = prev.some(m => m.content === lastStreamText && m.role === 'assistant')
+            if (hasIt) return prev
+            return [...prev, {
+              id: `stream-${Date.now()}`,
+              content: lastStreamText,
+              role: 'assistant',
+              timestamp: new Date()
+            }]
+          })
+        }
+        setStreamingText(null)
+        setIsLoading(false)
+        // Sync messages from gateway history
+        const mapped: Message[] = history.map((m, i) => ({
+          id: `gw-${m.timestamp}-${i}`,
+          content: m.content,
+          role: m.role,
+          timestamp: new Date(m.timestamp)
+        }))
+        if (mapped.length > 0) {
+          setMessages([{
+            ...WELCOME_MESSAGE,
+            timestamp: new Date(mapped[0].timestamp.getTime() - 1000)
+          }, ...mapped])
+        }
+      },
+      onChatError: (error) => {
+        setStreamingText(null)
+        setIsLoading(false)
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          content: `Connection issue: ${error}. Retrying...`,
+          role: 'assistant',
+          timestamp: new Date()
+        }])
+      }
+    })
+
+    client.switchSession('dashboard')
+  }, [isOpen, client])
+
+  // Reset registered flag when panel closes
+  useEffect(() => {
+    if (!isOpen) {
+      registeredRef.current = false
     }
   }, [isOpen])
 
@@ -66,23 +140,6 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
       onMessageSent?.()
     }
   }, [isOpen, initialMessage]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Check connection status
-  useEffect(() => {
-    const checkConnection = async () => {
-      try {
-        const response = await fetch('/api/chat')
-        const data = await response.json()
-        setConnectionStatus(data.openclawIntegration ? 'connected' : 'disconnected')
-      } catch {
-        setConnectionStatus('disconnected')
-      }
-    }
-    
-    checkConnection()
-    const interval = setInterval(checkConnection, 30000) // Check every 30s
-    return () => clearInterval(interval)
-  }, [])
 
   const sendMessage = useCallback(async (messageText?: string) => {
     const textToSend = messageText || input.trim()
@@ -99,38 +156,38 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
     setInput('')
     setIsLoading(true)
     setShowQuickActions(false)
+    setStreamingText(null)
 
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: textToSend })
-      })
-
-      const data = await response.json()
-
-      if (data.response) {
-        const assistantMessage: Message = {
+    if (client && client.connectionState === 'connected') {
+      await client.sendMessage(textToSend)
+    } else {
+      // Fallback: try the API route
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: textToSend })
+        })
+        const data = await response.json()
+        if (data.response) {
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            content: data.response,
+            role: 'assistant',
+            timestamp: new Date()
+          }])
+        }
+      } catch {
+        setMessages(prev => [...prev, {
           id: (Date.now() + 1).toString(),
-          content: data.response,
+          content: "Not connected to Pepper. Please wait for the connection to be established.",
           role: 'assistant',
           timestamp: new Date()
-        }
-        setMessages(prev => [...prev, assistantMessage])
+        }])
       }
-    } catch (error) {
-      console.error('Failed to send message:', error)
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: "Sorry, I couldn't process that. Please try again.",
-        role: 'assistant',
-        timestamp: new Date()
-      }
-      setMessages(prev => [...prev, errorMessage])
-    } finally {
       setIsLoading(false)
     }
-  }, [input, isLoading])
+  }, [input, isLoading, client])
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -141,7 +198,6 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
 
   const handleQuickAction = (action: QuickAction) => {
     if (action.message.endsWith(' ')) {
-      // Search action - put in input for user to complete
       setInput(action.message)
       inputRef.current?.focus()
     } else {
@@ -150,10 +206,10 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
   }
 
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
       minute: '2-digit',
-      hour12: true 
+      hour12: true
     })
   }
 
@@ -168,7 +224,7 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
   const getStatusText = () => {
     switch (connectionStatus) {
       case 'connected': return 'Connected to OpenClaw'
-      case 'disconnected': return 'Local mode'
+      case 'disconnected': return 'Reconnecting...'
       default: return 'Connecting...'
     }
   }
@@ -178,11 +234,11 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
   return (
     <>
       {/* Backdrop */}
-      <div 
+      <div
         className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden"
         onClick={onClose}
       />
-      
+
       {/* Chat Panel */}
       <div className={`
         fixed right-0 top-0 h-full w-full sm:w-96 z-50
@@ -206,7 +262,7 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
               {getStatusText()}
             </p>
           </div>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 rounded-lg hover:bg-pepper-light/20 text-pepper-muted hover:text-pepper-text transition-colors"
           >
@@ -224,9 +280,9 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
               className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
             >
               <div className={`
-                max-w-[80%] rounded-2xl px-4 py-3 
-                ${message.role === 'user' 
-                  ? 'bg-pepper-accent text-white rounded-br-md' 
+                max-w-[80%] rounded-2xl px-4 py-3
+                ${message.role === 'user'
+                  ? 'bg-pepper-accent text-white rounded-br-md'
                   : 'bg-pepper-tertiary text-pepper-text rounded-bl-md border border-pepper-light/10'
                 }
               `}>
@@ -239,8 +295,18 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
               </div>
             </div>
           ))}
-          
-          {isLoading && (
+
+          {/* Streaming response */}
+          {streamingText && (
+            <div className="flex justify-start animate-fade-in">
+              <div className="max-w-[80%] rounded-2xl rounded-bl-md px-4 py-3 bg-pepper-tertiary text-pepper-text border border-pepper-light/10">
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{streamingText}</p>
+                <p className="text-xs mt-1 text-pepper-muted">typing...</p>
+              </div>
+            </div>
+          )}
+
+          {isLoading && !streamingText && (
             <div className="flex justify-start animate-fade-in">
               <div className="bg-pepper-tertiary rounded-2xl rounded-bl-md px-4 py-3 border border-pepper-light/10">
                 <div className="flex gap-1">
@@ -251,7 +317,7 @@ export default function ChatPanel({ isOpen, onClose, initialMessage, onMessageSe
               </div>
             </div>
           )}
-          
+
           <div ref={messagesEndRef} />
         </div>
 

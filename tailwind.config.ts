@@ -42,8 +42,13 @@ const config: Config = {
         'slide-up': 'slideUp 0.5s ease-out',
         'pulse-slow': 'pulse 3s ease-in-out infinite',
         'glow': 'glow 2s ease-in-out infinite alternate',
+        'sheet-up': 'sheetUp 0.3s ease-out',
       },
       keyframes: {
+        sheetUp: {
+          '0%': { transform: 'translateY(100%)' },
+          '100%': { transform: 'translateY(0)' },
+        },
         fadeIn: {
           '0%': { opacity: '0' },
           '100%': { opacity: '1' },

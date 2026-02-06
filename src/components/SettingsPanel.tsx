@@ -470,10 +470,6 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
                 Refresh Settings
               </button>
             </>
-          ) : (
-            <div className="flex items-center justify-center h-32 text-pepper-muted">
-              Failed to load settings
-            </div>
           )}
         </div>
 

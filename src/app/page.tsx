@@ -2,12 +2,16 @@
 
 import { useState, useEffect, useReducer, useCallback, useRef } from 'react'
 import ChatPanel from '@/components/ChatPanel'
+import CardChat from '@/components/CardChat'
+import CardDetailSheet from '@/components/CardDetailSheet'
 import QuickActionsBar from '@/components/QuickActionsBar'
 import CalendarWidget from '@/components/CalendarWidget'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import Toast, { useToast } from '@/components/Toast'
 import CommandPalette from '@/components/CommandPalette'
 import SettingsPanel from '@/components/SettingsPanel'
+import { OpenClawClient, ConnectionState } from '@/lib/openclaw-client'
+import { GATEWAY_URL, GATEWAY_TOKEN, GATEWAY_PASSWORD, DASHBOARD_DEVICE } from '@/lib/constants'
 
 // Types
 interface EmailContext {
@@ -53,7 +57,7 @@ interface PendingResponse {
 }
 
 // Reducer for todos
-type TodoAction = 
+type TodoAction =
   | { type: 'TOGGLE_COMPLETE'; id: string }
   | { type: 'REORDER'; fromIndex: number; toIndex: number }
   | { type: 'SET_TODOS'; todos: Todo[] }
@@ -64,7 +68,7 @@ type TodoAction =
 function todoReducer(state: Todo[], action: TodoAction): Todo[] {
   switch (action.type) {
     case 'TOGGLE_COMPLETE':
-      return state.map(todo => 
+      return state.map(todo =>
         todo.id === action.id ? { ...todo, completed: !todo.completed } : todo
       )
     case 'REORDER':
@@ -89,12 +93,34 @@ function todoReducer(state: Todo[], action: TodoAction): Todo[] {
 
 type FilterType = 'all' | 'active' | 'completed' | 'high'
 
+/** Build a context string from task metadata for the AI prompt */
+function buildTaskContext(todo: Todo): string {
+  if (todo.context?.email) {
+    const e = todo.context.email
+    return `Task: "${todo.text}". Email from ${e.from}, subject "${e.subject}". Snippet: ${e.snippet}`
+  }
+  if (todo.context?.person) {
+    const p = todo.context.person
+    return `Task: "${todo.text}". Person: ${p.name}${p.company ? ` from ${p.company}` : ''}${p.lastContact ? `, last contact: ${p.lastContact}` : ''}`
+  }
+  if (todo.context?.calendarEvent) {
+    const c = todo.context.calendarEvent
+    return `Task: "${todo.text}". Calendar event: "${c.title}" at ${c.time}${c.attendees?.length ? `, attendees: ${c.attendees.join(', ')}` : ''}`
+  }
+  return `Task: "${todo.text}"${todo.details ? `. Details: ${todo.details}` : ''}`
+}
+
+function buildResponseContext(item: PendingResponse): string {
+  return `Pending response from ${item.person} about "${item.topic}" (since ${item.since}).${item.context ? ` Context: ${item.context}` : ''}`
+}
+
 export default function Dashboard() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [greeting, setGreeting] = useState('')
   const [mounted, setMounted] = useState(false)
   const [todos, dispatch] = useReducer(todoReducer, [])
   const [expandedTodo, setExpandedTodo] = useState<string | null>(null)
+  const [expandedResponse, setExpandedResponse] = useState<string | null>(null)
   const [filter, setFilter] = useState<FilterType>('all')
   const [draggedItem, setDraggedItem] = useState<number | null>(null)
   const [activeSection, setActiveSection] = useState<'tasks' | 'responses' | 'events'>('tasks')
@@ -106,10 +132,35 @@ export default function Dashboard() {
   const [newTaskText, setNewTaskText] = useState('')
   const [newTaskPriority, setNewTaskPriority] = useState<'high' | 'medium' | 'low'>('medium')
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
-  const chatRef = useRef<{ sendMessage: (msg: string) => void } | null>(null)
+  const [connectionStatus, setConnectionStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
+  const clientRef = useRef<OpenClawClient | null>(null)
   const { toasts, addToast, dismissToast } = useToast()
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+
+  // Lift OpenClawClient to dashboard level — single shared connection
+  useEffect(() => {
+    const client = new OpenClawClient({
+      gatewayUrl: GATEWAY_URL,
+      token: GATEWAY_TOKEN,
+      password: GATEWAY_PASSWORD,
+      sessionKey: 'dashboard',
+      deviceIdentity: DASHBOARD_DEVICE,
+      onConnectionChange: (state: ConnectionState) => {
+        if (state === 'connected') setConnectionStatus('connected')
+        else if (state === 'connecting') setConnectionStatus('checking')
+        else setConnectionStatus('disconnected')
+      },
+    })
+
+    clientRef.current = client
+    client.start()
+
+    return () => {
+      client.stop()
+      clientRef.current = null
+    }
+  }, [])
 
   // Fetch tasks from API
   const fetchTasks = useCallback(async () => {
@@ -162,6 +213,8 @@ export default function Dashboard() {
         setEditingId(null)
         setIsCommandPaletteOpen(false)
         setIsSettingsOpen(false)
+        setExpandedTodo(null)
+        setExpandedResponse(null)
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()
@@ -179,32 +232,9 @@ export default function Dashboard() {
     { id: '4', person: 'Luca Rinaldi', topic: 'Tomorrow schedule', since: 'Feb 5', context: 'Luca Rinaldi is your team member. Asked about his schedule for tomorrow to plan task assignments.' },
   ]
 
-  // Handle click on pending response card
-  const handleResponseClick = useCallback((response: PendingResponse) => {
-    const message = response.context 
-      ? `About ${response.person} (${response.topic}): ${response.context}\n\nWhat would you like to know or do?`
-      : `What's the status on ${response.person} regarding "${response.topic}"?`
-    setPendingMessage(message)
-    setIsChatOpen(true)
-  }, [])
-
   // Quick action handler - opens chat with prefilled message
   const handleQuickAction = useCallback((message: string) => {
     setPendingMessage(message)
-    setIsChatOpen(true)
-  }, [])
-
-  // Ask AI about a specific task
-  const handleAskAboutTask = useCallback((todo: Todo) => {
-    let context = `Regarding task: "${todo.text}"`
-    
-    if (todo.context?.email) {
-      context = `About this email from ${todo.context.email.from} with subject "${todo.context.email.subject}":`
-    } else if (todo.context?.person) {
-      context = `About ${todo.context.person.name}${todo.context.person.company ? ` from ${todo.context.person.company}` : ''}:`
-    }
-    
-    setPendingMessage(context + ' ')
     setIsChatOpen(true)
   }, [])
 
@@ -218,7 +248,7 @@ export default function Dashboard() {
   // API handlers
   const handleAddTask = async () => {
     if (!newTaskText.trim()) return
-    
+
     const tempId = `temp-${Date.now()}`
     const newTodo: Todo = {
       id: tempId,
@@ -228,12 +258,12 @@ export default function Dashboard() {
       createdAt: new Date().toISOString(),
       source: 'manual'
     }
-    
+
     dispatch({ type: 'ADD_TODO', todo: newTodo })
     setNewTaskText('')
     setShowNewTask(false)
     addToast('Task added successfully', 'success')
-    
+
     try {
       const response = await fetch('/api/tasks', {
         method: 'POST',
@@ -252,7 +282,7 @@ export default function Dashboard() {
 
   const handleUpdateTask = async (id: string, updates: Partial<Todo>) => {
     dispatch({ type: 'UPDATE_TODO', id, updates })
-    
+
     try {
       await fetch('/api/tasks', {
         method: 'PUT',
@@ -267,7 +297,7 @@ export default function Dashboard() {
   const handleDeleteTask = async (id: string) => {
     dispatch({ type: 'DELETE_TODO', id })
     addToast('Task deleted', 'info')
-    
+
     try {
       await fetch(`/api/tasks?id=${id}`, { method: 'DELETE' })
     } catch (error) {
@@ -314,7 +344,7 @@ export default function Dashboard() {
   const handleDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault()
     if (draggedItem === null || draggedItem === index) return
-    
+
     dispatch({ type: 'REORDER', fromIndex: draggedItem, toIndex: index })
     setDraggedItem(index)
   }
@@ -325,6 +355,10 @@ export default function Dashboard() {
 
   const toggleExpand = (id: string) => {
     setExpandedTodo(expandedTodo === id ? null : id)
+  }
+
+  const toggleResponseExpand = (id: string) => {
+    setExpandedResponse(expandedResponse === id ? null : id)
   }
 
   const getPriorityClass = (priority: string) => {
@@ -373,7 +407,7 @@ export default function Dashboard() {
               </p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3">
             {/* Settings Button */}
             <button
@@ -381,12 +415,12 @@ export default function Dashboard() {
               className="glass-card p-3 hover:border-pepper-accent/30 transition-all group"
               title="Settings"
             >
-              <svg 
-                width="24" 
-                height="24" 
-                viewBox="0 0 24 24" 
-                fill="none" 
-                stroke="currentColor" 
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
                 strokeWidth="2"
                 className="text-pepper-muted group-hover:text-pepper-accent transition-colors group-hover:rotate-45 transition-transform duration-300"
               >
@@ -398,17 +432,17 @@ export default function Dashboard() {
             <div className="glass-card px-6 py-4 flex items-center gap-6">
               <div className="text-right">
                 <div className="time-display text-3xl md:text-4xl font-light text-pepper-accent glow-text">
-                  {currentTime.toLocaleTimeString('en-US', { 
-                    hour: '2-digit', 
+                  {currentTime.toLocaleTimeString('en-US', {
+                    hour: '2-digit',
                     minute: '2-digit',
-                    hour12: true 
+                    hour12: true
                   })}
                 </div>
                 <div className="text-sm text-pepper-muted mt-1">
-                  {currentTime.toLocaleDateString('en-US', { 
-                    weekday: 'long', 
-                    month: 'short', 
-                    day: 'numeric' 
+                  {currentTime.toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    month: 'short',
+                    day: 'numeric'
                   })}
                 </div>
               </div>
@@ -418,7 +452,7 @@ export default function Dashboard() {
 
         {/* Keyboard shortcuts hint */}
         <div className="hidden md:flex gap-3 text-xs text-pepper-muted">
-          <button 
+          <button
             onClick={() => setIsCommandPaletteOpen(true)}
             className="px-2 py-1 rounded bg-pepper-tertiary border border-pepper-light/10 hover:border-pepper-accent/30 transition-colors cursor-pointer"
           >
@@ -450,7 +484,7 @@ export default function Dashboard() {
 
       {/* Dashboard Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
+
         {/* Active Todos */}
         <div className={`lg:col-span-5 glass-card p-6 animate-slide-up animate-delay-100 ${activeSection !== 'tasks' ? 'hidden lg:block' : ''}`}>
           <h2 className="card-header">
@@ -554,8 +588,8 @@ export default function Dashboard() {
             /* Task List */
             <ul className="space-y-3">
               {filteredTodos.map((todo, index) => (
-                <li 
-                  key={todo.id} 
+                <li
+                  key={todo.id}
                   draggable
                   onDragStart={() => handleDragStart(index)}
                   onDragOver={(e) => handleDragOver(e, index)}
@@ -576,15 +610,15 @@ export default function Dashboard() {
                         <circle cx="10" cy="12" r="1.5" />
                       </svg>
                     </div>
-                    
+
                     {/* Checkbox */}
-                    <input 
-                      type="checkbox" 
+                    <input
+                      type="checkbox"
                       checked={todo.completed}
                       onChange={() => toggleTodo(todo.id)}
                       className="custom-checkbox mt-0.5 flex-shrink-0"
                     />
-                    
+
                     {/* Content */}
                     <div className="flex-1 min-w-0">
                       {editingId === todo.id ? (
@@ -598,7 +632,7 @@ export default function Dashboard() {
                           className="w-full bg-transparent border-b border-pepper-accent focus:outline-none text-pepper-text"
                         />
                       ) : (
-                        <div 
+                        <div
                           className="cursor-pointer"
                           onClick={() => toggleExpand(todo.id)}
                           onDoubleClick={() => startEditing(todo)}
@@ -616,113 +650,103 @@ export default function Dashboard() {
                               </span>
                             )}
                           </div>
-                          
-                          {/* Expanded Details */}
+
+                          {/* Expanded Details + CardChat */}
                           <div className={`overflow-hidden transition-all duration-300 ${
-                            expandedTodo === todo.id ? 'max-h-[500px] mt-3 opacity-100' : 'max-h-0 opacity-0'
+                            expandedTodo === todo.id ? 'max-h-[800px] mt-3 opacity-100' : 'max-h-0 opacity-0'
                           }`}>
-                            <div className="p-4 rounded-lg bg-pepper-primary/50 border border-pepper-light/10 space-y-3">
-                              {/* Email Context */}
-                              {todo.context?.email && (
-                                <div className="space-y-2">
-                                  <div className="flex items-center gap-2 text-xs text-pepper-muted">
-                                    <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400">📧 Email</span>
-                                    <span>{todo.context.email.date}</span>
-                                    {todo.context.email.hasAttachments && (
-                                      <span className="px-2 py-0.5 rounded bg-pepper-light/20">📎</span>
-                                    )}
-                                  </div>
-                                  <div className="text-sm">
-                                    <div className="flex items-center gap-2 mb-1">
-                                      <span className="text-pepper-muted">From:</span>
-                                      <span className="text-pepper-text font-medium">{todo.context.email.from}</span>
+                            <CardDetailSheet
+                              isOpen={expandedTodo === todo.id}
+                              onClose={() => setExpandedTodo(null)}
+                              title={todo.text}
+                            >
+                              <div className="space-y-3">
+                                {/* Email Context */}
+                                {todo.context?.email && (
+                                  <div className="space-y-2">
+                                    <div className="flex items-center gap-2 text-xs text-pepper-muted">
+                                      <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400">📧 Email</span>
+                                      <span>{todo.context.email.date}</span>
+                                      {todo.context.email.hasAttachments && (
+                                        <span className="px-2 py-0.5 rounded bg-pepper-light/20">📎</span>
+                                      )}
                                     </div>
-                                    <div className="flex items-center gap-2 mb-2">
-                                      <span className="text-pepper-muted">Subject:</span>
-                                      <span className="text-pepper-text">{todo.context.email.subject}</span>
+                                    <div className="text-sm">
+                                      <div className="flex items-center gap-2 mb-1">
+                                        <span className="text-pepper-muted">From:</span>
+                                        <span className="text-pepper-text font-medium">{todo.context.email.from}</span>
+                                      </div>
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <span className="text-pepper-muted">Subject:</span>
+                                        <span className="text-pepper-text">{todo.context.email.subject}</span>
+                                      </div>
+                                    </div>
+                                    <div className="p-3 rounded-lg bg-pepper-tertiary border border-pepper-light/10">
+                                      <p className="text-sm text-pepper-text/90 whitespace-pre-wrap leading-relaxed">
+                                        {todo.context.email.fullBody || todo.context.email.snippet}
+                                      </p>
                                     </div>
                                   </div>
+                                )}
+
+                                {/* Person Context */}
+                                {todo.context?.person && !todo.context?.email && (
+                                  <div className="flex items-center gap-3 p-3 rounded-lg bg-pepper-tertiary border border-pepper-light/10">
+                                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pepper-light to-pepper-secondary flex items-center justify-center text-pepper-accent font-semibold text-sm">
+                                      {todo.context.person.name.split(' ').map(n => n[0]).join('')}
+                                    </div>
+                                    <div>
+                                      <div className="font-medium text-pepper-text">{todo.context.person.name}</div>
+                                      {todo.context.person.company && (
+                                        <div className="text-xs text-pepper-muted">{todo.context.person.company}</div>
+                                      )}
+                                      {todo.context.person.lastContact && (
+                                        <div className="text-xs text-pepper-muted/60">Last contact: {todo.context.person.lastContact}</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Calendar Event Context */}
+                                {todo.context?.calendarEvent && (
                                   <div className="p-3 rounded-lg bg-pepper-tertiary border border-pepper-light/10">
-                                    <p className="text-sm text-pepper-text/90 whitespace-pre-wrap leading-relaxed">
-                                      {todo.context.email.fullBody || todo.context.email.snippet}
-                                    </p>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Person Context */}
-                              {todo.context?.person && !todo.context?.email && (
-                                <div className="flex items-center gap-3 p-3 rounded-lg bg-pepper-tertiary border border-pepper-light/10">
-                                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pepper-light to-pepper-secondary flex items-center justify-center text-pepper-accent font-semibold text-sm">
-                                    {todo.context.person.name.split(' ').map(n => n[0]).join('')}
-                                  </div>
-                                  <div>
-                                    <div className="font-medium text-pepper-text">{todo.context.person.name}</div>
-                                    {todo.context.person.company && (
-                                      <div className="text-xs text-pepper-muted">{todo.context.person.company}</div>
-                                    )}
-                                    {todo.context.person.lastContact && (
-                                      <div className="text-xs text-pepper-muted/60">Last contact: {todo.context.person.lastContact}</div>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Calendar Event Context */}
-                              {todo.context?.calendarEvent && (
-                                <div className="p-3 rounded-lg bg-pepper-tertiary border border-pepper-light/10">
-                                  <div className="flex items-center gap-2 text-xs text-pepper-muted mb-2">
-                                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">📅 Calendar</span>
-                                    <span>{todo.context.calendarEvent.time}</span>
-                                  </div>
-                                  <div className="font-medium text-pepper-text">{todo.context.calendarEvent.title}</div>
-                                  {todo.context.calendarEvent.attendees && (
-                                    <div className="text-xs text-pepper-muted mt-1">
-                                      {todo.context.calendarEvent.attendees.join(', ')}
+                                    <div className="flex items-center gap-2 text-xs text-pepper-muted mb-2">
+                                      <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">📅 Calendar</span>
+                                      <span>{todo.context.calendarEvent.time}</span>
                                     </div>
-                                  )}
-                                </div>
-                              )}
+                                    <div className="font-medium text-pepper-text">{todo.context.calendarEvent.title}</div>
+                                    {todo.context.calendarEvent.attendees && (
+                                      <div className="text-xs text-pepper-muted mt-1">
+                                        {todo.context.calendarEvent.attendees.join(', ')}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
 
-                              {/* Basic Details (fallback) */}
-                              {!todo.context?.email && !todo.context?.person && !todo.context?.calendarEvent && (
-                                <p className="text-sm text-pepper-muted whitespace-pre-wrap">
-                                  {todo.details || 'No additional details'}
-                                </p>
-                              )}
+                                {/* Basic Details (fallback) */}
+                                {!todo.context?.email && !todo.context?.person && !todo.context?.calendarEvent && (
+                                  <p className="text-sm text-pepper-muted whitespace-pre-wrap">
+                                    {todo.details || 'No additional details'}
+                                  </p>
+                                )}
 
-                              {/* Footer with actions */}
-                              <div className="flex items-center justify-between pt-2 border-t border-pepper-light/10">
-                                <div className="text-xs text-pepper-muted/60">
-                                  Created: {new Date(todo.createdAt).toLocaleDateString()}
-                                </div>
-                                <div className="flex items-center gap-2">
+                                {/* Footer */}
+                                <div className="flex items-center justify-between pt-2 border-t border-pepper-light/10">
+                                  <div className="text-xs text-pepper-muted/60">
+                                    Created: {new Date(todo.createdAt).toLocaleDateString()}
+                                  </div>
                                   <span className="text-xs text-pepper-muted/60">Double-click to edit</span>
-                                  {/* Ask AI Button */}
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleAskAboutTask(todo)
-                                    }}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-pepper-accent/20 text-pepper-accent border border-pepper-accent/30 hover:bg-pepper-accent/30 hover:border-pepper-accent/50 transition-all group"
-                                  >
-                                    <svg 
-                                      width="14" 
-                                      height="14" 
-                                      viewBox="0 0 24 24" 
-                                      fill="none" 
-                                      stroke="currentColor" 
-                                      strokeWidth="2"
-                                      className="group-hover:scale-110 transition-transform"
-                                    >
-                                      <circle cx="12" cy="12" r="3" />
-                                      <path d="M12 2v2m0 16v2M2 12h2m16 0h2m-4.2-5.8l1.4-1.4M4.8 19.2l1.4-1.4m0-11.6L4.8 4.8m14.4 14.4l-1.4-1.4" />
-                                    </svg>
-                                    Ask AI
-                                  </button>
                                 </div>
+
+                                {/* Per-card chat thread */}
+                                <CardChat
+                                  sessionKey={`task-${todo.id}`}
+                                  client={clientRef.current}
+                                  cardContext={buildTaskContext(todo)}
+                                  isVisible={expandedTodo === todo.id}
+                                />
                               </div>
-                            </div>
+                            </CardDetailSheet>
                           </div>
                         </div>
                       )}
@@ -730,45 +754,24 @@ export default function Dashboard() {
 
                     {/* Actions */}
                     <div className="flex items-center gap-1">
-                      {/* Ask AI Button - always visible */}
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleAskAboutTask(todo)
-                        }}
-                        className="text-pepper-accent/60 hover:text-pepper-accent transition-colors p-1.5 rounded-lg hover:bg-pepper-accent/10"
-                        title="Ask AI about this task"
-                      >
-                        <svg 
-                          width="16" 
-                          height="16" 
-                          viewBox="0 0 24 24" 
-                          fill="none" 
-                          stroke="currentColor" 
-                          strokeWidth="2"
-                        >
-                          <circle cx="12" cy="12" r="3" />
-                          <path d="M12 2v2m0 16v2M2 12h2m16 0h2m-4.2-5.8l1.4-1.4M4.8 19.2l1.4-1.4m0-11.6L4.8 4.8m14.4 14.4l-1.4-1.4" />
-                        </svg>
-                      </button>
-                      <button 
+                      <button
                         onClick={() => toggleExpand(todo.id)}
                         className="text-pepper-muted hover:text-pepper-accent transition-colors p-1"
                         title="Show details"
                       >
-                        <svg 
-                          width="16" 
-                          height="16" 
-                          viewBox="0 0 16 16" 
-                          fill="none" 
-                          stroke="currentColor" 
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
                           strokeWidth="2"
                           className={`transition-transform ${expandedTodo === todo.id ? 'rotate-180' : ''}`}
                         >
                           <path d="M4 6L8 10L12 6" />
                         </svg>
                       </button>
-                      <button 
+                      <button
                         onClick={() => handleDeleteTask(todo.id)}
                         className="text-pepper-muted hover:text-red-400 transition-colors p-1 opacity-0 group-hover:opacity-100"
                         title="Delete task"
@@ -788,7 +791,7 @@ export default function Dashboard() {
             <div className="text-center py-8 text-pepper-muted">
               <p className="text-4xl mb-2">✨</p>
               <p>No tasks match your filter</p>
-              <button 
+              <button
                 onClick={() => setShowNewTask(true)}
                 className="mt-3 text-pepper-accent hover:underline text-sm"
               >
@@ -800,7 +803,7 @@ export default function Dashboard() {
 
         {/* Right Column */}
         <div className={`lg:col-span-7 flex flex-col gap-6 ${activeSection !== 'responses' && activeSection !== 'events' ? 'hidden lg:flex' : ''}`}>
-          
+
           {/* Pending Responses */}
           <div className={`glass-card p-6 animate-slide-up animate-delay-200 ${activeSection === 'events' ? 'hidden lg:block' : ''}`}>
             <h2 className="card-header">
@@ -811,27 +814,64 @@ export default function Dashboard() {
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {pendingResponses.map((item) => (
-                <div 
-                  key={item.id} 
-                  onClick={() => handleResponseClick(item)}
-                  className="list-item flex items-center gap-4 group cursor-pointer hover:border-pepper-accent/30 transition-all"
+                <div
+                  key={item.id}
+                  onClick={() => toggleResponseExpand(item.id)}
+                  className={`list-item group cursor-pointer hover:border-pepper-accent/30 transition-all ${
+                    expandedResponse === item.id ? 'ring-1 ring-pepper-accent/30' : ''
+                  }`}
                 >
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pepper-light to-pepper-secondary flex items-center justify-center text-pepper-accent font-semibold text-sm flex-shrink-0 group-hover:shadow-glow transition-shadow">
-                    {item.person.split(' ').map(n => n[0]).join('')}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-pepper-text truncate">{item.person}</div>
-                    <div className="text-sm text-pepper-muted truncate">{item.topic}</div>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <div className="text-xs text-pepper-muted/60">{item.since}</div>
-                    {/* Ask AI indicator */}
-                    <div className="w-6 h-6 rounded-lg bg-pepper-accent/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-pepper-accent">
-                        <circle cx="12" cy="12" r="3" />
-                        <path d="M12 2v2m0 16v2M2 12h2m16 0h2" />
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pepper-light to-pepper-secondary flex items-center justify-center text-pepper-accent font-semibold text-sm flex-shrink-0 group-hover:shadow-glow transition-shadow">
+                      {item.person.split(' ').map(n => n[0]).join('')}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-pepper-text truncate">{item.person}</div>
+                      <div className="text-sm text-pepper-muted truncate">{item.topic}</div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <div className="text-xs text-pepper-muted/60">{item.since}</div>
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        className={`text-pepper-muted transition-transform ${expandedResponse === item.id ? 'rotate-180' : ''}`}
+                      >
+                        <path d="M4 6L8 10L12 6" />
                       </svg>
                     </div>
+                  </div>
+
+                  {/* Expanded: context + CardChat */}
+                  <div className={`overflow-hidden transition-all duration-300 ${
+                    expandedResponse === item.id ? 'max-h-[600px] mt-3 opacity-100' : 'max-h-0 opacity-0'
+                  }`}>
+                    <CardDetailSheet
+                      isOpen={expandedResponse === item.id}
+                      onClose={() => setExpandedResponse(null)}
+                      title={`${item.person} - ${item.topic}`}
+                    >
+                      <div className="space-y-3">
+                        {item.context && (
+                          <div className="p-3 rounded-lg bg-pepper-tertiary border border-pepper-light/10">
+                            <p className="text-sm text-pepper-text/90 leading-relaxed">{item.context}</p>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 text-xs text-pepper-muted">
+                          <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400">⏳ Waiting since {item.since}</span>
+                        </div>
+
+                        <CardChat
+                          sessionKey={`response-${item.id}`}
+                          client={clientRef.current}
+                          cardContext={buildResponseContext(item)}
+                          isVisible={expandedResponse === item.id}
+                        />
+                      </div>
+                    </CardDetailSheet>
                   </div>
                 </div>
               ))}
@@ -857,8 +897,8 @@ export default function Dashboard() {
                 <div className="text-4xl font-bold text-pepper-accent glow-text group-hover:scale-110 transition-transform">{activeCount}</div>
                 <div className="text-sm text-pepper-muted mt-2">Active Tasks</div>
                 <div className="w-full bg-pepper-light/30 h-1 rounded-full mt-3 overflow-hidden">
-                  <div 
-                    className="h-full bg-pepper-accent rounded-full transition-all duration-500" 
+                  <div
+                    className="h-full bg-pepper-accent rounded-full transition-all duration-500"
                     style={{ width: `${todos.length ? (activeCount / todos.length) * 100 : 0}%` }}
                   />
                 </div>
@@ -935,20 +975,22 @@ export default function Dashboard() {
       </button>
 
       {/* Quick Actions Bar */}
-      <QuickActionsBar 
+      <QuickActionsBar
         onAction={handleQuickAction}
         className={isChatOpen ? 'opacity-0 pointer-events-none' : ''}
       />
 
-      {/* Chat Panel */}
-      <ChatPanel 
-        isOpen={isChatOpen} 
+      {/* Chat Panel — shared client, global "dashboard" session */}
+      <ChatPanel
+        isOpen={isChatOpen}
         onClose={() => {
           setIsChatOpen(false)
           setPendingMessage(null)
         }}
         initialMessage={pendingMessage}
         onMessageSent={() => setPendingMessage(null)}
+        client={clientRef.current}
+        connectionStatus={connectionStatus}
       />
 
       {/* Command Palette */}

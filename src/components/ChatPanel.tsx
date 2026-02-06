@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 
 interface Message {
   id: string
@@ -14,6 +14,19 @@ interface ChatPanelProps {
   onClose: () => void
 }
 
+interface QuickAction {
+  label: string
+  emoji: string
+  message: string
+}
+
+const quickActions: QuickAction[] = [
+  { label: 'Check Email', emoji: '📧', message: 'Check my email inbox for anything urgent' },
+  { label: 'Weather', emoji: '🌤️', message: "What's the weather like today?" },
+  { label: 'Calendar', emoji: '📅', message: 'What do I have on my calendar today?' },
+  { label: 'Search', emoji: '🔍', message: 'Search the web for ' },
+]
+
 export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -25,6 +38,8 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   ])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
+  const [showQuickActions, setShowQuickActions] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -42,12 +57,30 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     }
   }, [isOpen])
 
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return
+  // Check connection status
+  useEffect(() => {
+    const checkConnection = async () => {
+      try {
+        const response = await fetch('/api/chat')
+        const data = await response.json()
+        setConnectionStatus(data.openclawIntegration ? 'connected' : 'disconnected')
+      } catch {
+        setConnectionStatus('disconnected')
+      }
+    }
+    
+    checkConnection()
+    const interval = setInterval(checkConnection, 30000) // Check every 30s
+    return () => clearInterval(interval)
+  }, [])
+
+  const sendMessage = useCallback(async (messageText?: string) => {
+    const textToSend = messageText || input.trim()
+    if (!textToSend || isLoading) return
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      content: input.trim(),
+      content: textToSend,
       role: 'user',
       timestamp: new Date()
     }
@@ -55,12 +88,13 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     setMessages(prev => [...prev, userMessage])
     setInput('')
     setIsLoading(true)
+    setShowQuickActions(false)
 
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage.content })
+        body: JSON.stringify({ message: textToSend })
       })
 
       const data = await response.json()
@@ -86,12 +120,22 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [input, isLoading])
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       sendMessage()
+    }
+  }
+
+  const handleQuickAction = (action: QuickAction) => {
+    if (action.message.endsWith(' ')) {
+      // Search action - put in input for user to complete
+      setInput(action.message)
+      inputRef.current?.focus()
+    } else {
+      sendMessage(action.message)
     }
   }
 
@@ -101,6 +145,22 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       minute: '2-digit',
       hour12: true 
     })
+  }
+
+  const getStatusColor = () => {
+    switch (connectionStatus) {
+      case 'connected': return 'bg-emerald-500'
+      case 'disconnected': return 'bg-amber-500'
+      default: return 'bg-gray-500 animate-pulse'
+    }
+  }
+
+  const getStatusText = () => {
+    switch (connectionStatus) {
+      case 'connected': return 'Connected to OpenClaw'
+      case 'disconnected': return 'Local mode'
+      default: return 'Connecting...'
+    }
   }
 
   if (!isOpen) return null
@@ -127,11 +187,14 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pepper-accent to-pepper-accentDark flex items-center justify-center text-lg shadow-glow">
               🧠
             </div>
-            <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-pepper-primary" />
+            <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ${getStatusColor()} border-2 border-pepper-primary`} />
           </div>
           <div className="flex-1">
             <h3 className="font-semibold text-pepper-text">Chat with Pepper</h3>
-            <p className="text-xs text-emerald-500">Online</p>
+            <p className="text-xs text-pepper-muted flex items-center gap-1">
+              <span className={`w-1.5 h-1.5 rounded-full ${getStatusColor()}`} />
+              {getStatusText()}
+            </p>
           </div>
           <button 
             onClick={onClose}
@@ -148,7 +211,7 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           {messages.map((message) => (
             <div
               key={message.id}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
             >
               <div className={`
                 max-w-[80%] rounded-2xl px-4 py-3 
@@ -157,7 +220,7 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                   : 'bg-pepper-tertiary text-pepper-text rounded-bl-md border border-pepper-light/10'
                 }
               `}>
-                <p className="text-sm leading-relaxed">{message.content}</p>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
                 <p className={`text-xs mt-1 ${
                   message.role === 'user' ? 'text-white/60' : 'text-pepper-muted'
                 }`}>
@@ -168,7 +231,7 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           ))}
           
           {isLoading && (
-            <div className="flex justify-start">
+            <div className="flex justify-start animate-fade-in">
               <div className="bg-pepper-tertiary rounded-2xl rounded-bl-md px-4 py-3 border border-pepper-light/10">
                 <div className="flex gap-1">
                   <div className="w-2 h-2 bg-pepper-accent rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
@@ -181,6 +244,30 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Quick Actions */}
+        {showQuickActions && messages.length < 3 && (
+          <div className="px-4 pb-2">
+            <p className="text-xs text-pepper-muted mb-2">Quick Actions</p>
+            <div className="flex flex-wrap gap-2">
+              {quickActions.map((action) => (
+                <button
+                  key={action.label}
+                  onClick={() => handleQuickAction(action)}
+                  className="
+                    flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs
+                    bg-pepper-tertiary border border-pepper-light/20
+                    text-pepper-text hover:border-pepper-accent/50 hover:bg-pepper-light/20
+                    transition-all duration-200 hover:scale-105
+                  "
+                >
+                  <span>{action.emoji}</span>
+                  <span>{action.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Input */}
         <div className="p-4 border-t border-pepper-light/20">
@@ -201,7 +288,7 @@ export default function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
               "
             />
             <button
-              onClick={sendMessage}
+              onClick={() => sendMessage()}
               disabled={!input.trim() || isLoading}
               className="
                 bg-pepper-accent hover:bg-pepper-accentLight disabled:bg-pepper-light

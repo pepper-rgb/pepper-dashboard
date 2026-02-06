@@ -6,6 +6,7 @@ import QuickActionsBar from '@/components/QuickActionsBar'
 import CalendarWidget from '@/components/CalendarWidget'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import Toast, { useToast } from '@/components/Toast'
+import CommandPalette from '@/components/CommandPalette'
 
 // Types
 interface Todo {
@@ -81,6 +82,7 @@ export default function Dashboard() {
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const chatRef = useRef<{ sendMessage: (msg: string) => void } | null>(null)
   const { toasts, addToast, dismissToast } = useToast()
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
 
   // Fetch tasks from API
   const fetchTasks = useCallback(async () => {
@@ -114,14 +116,24 @@ export default function Dashboard() {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        if (e.key === 'Escape') {
+          setShowNewTask(false)
+          setEditingId(null)
+        }
+        return
+      }
+
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
-        setIsChatOpen(true)
+        setIsCommandPaletteOpen(true)
       }
       if (e.key === 'Escape') {
         setIsChatOpen(false)
         setShowNewTask(false)
         setEditingId(null)
+        setIsCommandPaletteOpen(false)
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()
@@ -144,6 +156,13 @@ export default function Dashboard() {
     setPendingMessage(message)
     setIsChatOpen(true)
   }, [])
+
+  // Refresh handler
+  const handleRefresh = useCallback(() => {
+    setIsLoading(true)
+    fetchTasks()
+    addToast('Dashboard refreshed', 'info')
+  }, [fetchTasks, addToast])
 
   // API handlers
   const handleAddTask = async () => {
@@ -326,7 +345,12 @@ export default function Dashboard() {
 
         {/* Keyboard shortcuts hint */}
         <div className="hidden md:flex gap-3 text-xs text-pepper-muted">
-          <span className="px-2 py-1 rounded bg-pepper-tertiary border border-pepper-light/10">⌘K Chat</span>
+          <button 
+            onClick={() => setIsCommandPaletteOpen(true)}
+            className="px-2 py-1 rounded bg-pepper-tertiary border border-pepper-light/10 hover:border-pepper-accent/30 transition-colors cursor-pointer"
+          >
+            ⌘K Command
+          </button>
           <span className="px-2 py-1 rounded bg-pepper-tertiary border border-pepper-light/10">⌘N New Task</span>
           <span className="px-2 py-1 rounded bg-pepper-tertiary border border-pepper-light/10">Esc Close</span>
         </div>
@@ -725,6 +749,24 @@ export default function Dashboard() {
         }}
         initialMessage={pendingMessage}
         onMessageSent={() => setPendingMessage(null)}
+      />
+
+      {/* Command Palette */}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onOpenChat={(message) => {
+          setIsCommandPaletteOpen(false)
+          if (message) {
+            setPendingMessage(message)
+          }
+          setIsChatOpen(true)
+        }}
+        onAddTask={() => {
+          setIsCommandPaletteOpen(false)
+          setShowNewTask(true)
+        }}
+        onRefresh={handleRefresh}
       />
     </main>
   )

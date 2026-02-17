@@ -367,6 +367,12 @@ export class OpenClawClient {
     }
   }
 
+  /** Public RPC call — use for health, status, or any gateway method. */
+  async call<T = unknown>(method: string, params?: unknown): Promise<T> {
+    if (this.connectionState !== 'connected') throw new Error('Not connected')
+    return this.request(method, params ?? {}) as Promise<T>
+  }
+
   private request(method: string, params: unknown): Promise<unknown> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('not connected'))

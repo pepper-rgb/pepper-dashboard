@@ -2,44 +2,49 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { OpenClawClient } from '@/lib/openclaw-client'
+import { FRIDAY_URL } from '@/lib/constants'
 
-interface HealthMetrics {
+// --- Types ---
+
+interface FridayHealth {
+  timestamp: string
   gateway: {
     pid: number | null
     memoryMB: number
     uptime: string
-    mode: string  // FULL, DEGRADED, ESSENTIAL
+    mode: string
   }
-  channels: {
-    imessage: { status: 'ok' | 'warn' | 'error'; detail: string }
-    telegram: { status: 'ok' | 'warn' | 'error'; detail: string }
-    slack: { status: 'ok' | 'warn' | 'error'; detail: string }
-    email: { status: 'ok' | 'warn' | 'error'; detail: string }
-  }
-  browser: {
-    renderers: number
-    memoryMB: number
-  }
+  browser: { renderers: number; memoryMB: number }
   errors: {
     total24h: number
-    rate: number  // per minute
+    rate: number
     categories: Record<string, number>
   }
-  lanes: {
-    maxWaitMs: number
-    blockedCount: number
-  }
-  briefing: {
-    lastRun: string | null
-    status: string
-    durationMs: number
-  }
+  lanes: { maxWaitMs: number; blockedCount: number }
+  briefing: { lastRun: string | null; status: string; durationMs: number }
+  watchdog: { status: string; issues: string[] }
+}
+
+interface ChannelProbe {
+  name: string
+  status: 'ok' | 'warn' | 'error'
+  detail: string
+}
+
+interface SessionInfo {
+  sessionId?: string
+  model?: string
+  tokensUsed?: number
+  tokenLimit?: number
+  contextWindow?: number
 }
 
 interface SparkPoint {
   time: number
   value: number
 }
+
+// --- Sub-components ---
 
 function Sparkline({ data, color = '#8b5cf6', height = 32, width = 120 }: { data: SparkPoint[]; color?: string; height?: number; width?: number }) {
   if (data.length < 2) return <div style={{ width, height }} className="bg-pepper-tertiary/30 rounded" />
@@ -109,60 +114,135 @@ function ModeIndicator({ mode }: { mode: string }) {
   )
 }
 
+function SourceBadge({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded ${ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+      {label}
+    </span>
+  )
+}
+
+// --- Main Component ---
+
 export default function HealthTab({ client }: { client: OpenClawClient | null }) {
-  const [metrics, setMetrics] = useState<HealthMetrics | null>(null)
+  const [friday, setFriday] = useState<FridayHealth | null>(null)
+  const [fridayOk, setFridayOk] = useState(false)
+  const [channels, setChannels] = useState<ChannelProbe[]>([])
+  const [session, setSession] = useState<SessionInfo | null>(null)
+  const [gatewayOk, setGatewayOk] = useState(false)
   const [memoryHistory, setMemoryHistory] = useState<SparkPoint[]>([])
   const [errorHistory, setErrorHistory] = useState<SparkPoint[]>([])
   const [lastUpdated, setLastUpdated] = useState<string>('')
   const [loading, setLoading] = useState(true)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const fridayRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const gatewayRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const fetchMetrics = useCallback(async () => {
+  // --- FRIDAY fetch (system metrics, 30s) ---
+  const fetchFriday = useCallback(async () => {
     try {
-      const res = await fetch('/api/health')
+      const res = await fetch(`${FRIDAY_URL}/health`, { signal: AbortSignal.timeout(8000) })
       if (res.ok) {
-        const data = await res.json()
-        setMetrics(data)
-        setLastUpdated(new Date().toLocaleTimeString())
+        const data: FridayHealth = await res.json()
+        setFriday(data)
+        setFridayOk(true)
         setLoading(false)
 
-        // Track history for sparklines
         const now = Date.now()
         setMemoryHistory(prev => [...prev.slice(-59), { time: now, value: data.gateway?.memoryMB || 0 }])
         setErrorHistory(prev => [...prev.slice(-59), { time: now, value: data.errors?.rate || 0 }])
+      } else {
+        setFridayOk(false)
       }
-    } catch (e) {
-      console.error('Failed to fetch health metrics:', e)
+    } catch {
+      setFridayOk(false)
       setLoading(false)
     }
   }, [])
 
-  useEffect(() => {
-    fetchMetrics()
-    intervalRef.current = setInterval(fetchMetrics, 15000) // Poll every 15s
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+  // --- Gateway WebSocket fetch (channels + session, 15s) ---
+  const fetchGateway = useCallback(async () => {
+    if (!client || client.connectionState !== 'connected') {
+      setGatewayOk(false)
+      return
     }
-  }, [fetchMetrics])
 
-  if (loading) {
+    try {
+      const [healthResult, statusResult] = await Promise.all([
+        client.call<Record<string, unknown>>('health', { probe: true }).catch(() => null),
+        client.call<Record<string, unknown>>('status', {}).catch(() => null),
+      ])
+
+      setGatewayOk(true)
+
+      // Parse channel probes
+      if (healthResult) {
+        const probes: ChannelProbe[] = []
+        const ch = healthResult.channels as Record<string, { status?: string; detail?: string; error?: string }> | undefined
+        if (ch) {
+          for (const [name, info] of Object.entries(ch)) {
+            const status = info.error ? 'error' : (info.status === 'ok' || info.status === 'connected') ? 'ok' : 'warn'
+            probes.push({ name, status, detail: info.detail || info.error || info.status || 'unknown' })
+          }
+        }
+        if (probes.length > 0) setChannels(probes)
+      }
+
+      // Parse session/status
+      if (statusResult) {
+        const s = statusResult as Record<string, unknown>
+        const sess: SessionInfo = {}
+        if (s.sessionId) sess.sessionId = String(s.sessionId)
+        if (s.model) sess.model = String(s.model)
+        if (typeof s.tokensUsed === 'number') sess.tokensUsed = s.tokensUsed
+        if (typeof s.tokenLimit === 'number') sess.tokenLimit = s.tokenLimit
+        if (typeof s.contextWindow === 'number') sess.contextWindow = s.contextWindow
+        // Also check nested session object
+        const inner = s.session as Record<string, unknown> | undefined
+        if (inner) {
+          if (inner.id) sess.sessionId = String(inner.id)
+          if (inner.model) sess.model = String(inner.model)
+          if (typeof inner.tokensUsed === 'number') sess.tokensUsed = inner.tokensUsed
+          if (typeof inner.tokenLimit === 'number') sess.tokenLimit = inner.tokenLimit
+          if (typeof inner.contextWindow === 'number') sess.contextWindow = inner.contextWindow
+        }
+        setSession(sess)
+      }
+
+      setLastUpdated(new Date().toLocaleTimeString())
+    } catch {
+      setGatewayOk(false)
+    }
+  }, [client])
+
+  // --- Lifecycle ---
+  useEffect(() => {
+    fetchFriday()
+    fetchGateway()
+    fridayRef.current = setInterval(fetchFriday, 30000)
+    gatewayRef.current = setInterval(fetchGateway, 15000)
+    return () => {
+      if (fridayRef.current) clearInterval(fridayRef.current)
+      if (gatewayRef.current) clearInterval(gatewayRef.current)
+    }
+  }, [fetchFriday, fetchGateway])
+
+  // Re-fetch gateway data when connection state changes
+  useEffect(() => {
+    if (client?.connectionState === 'connected') {
+      fetchGateway()
+    }
+  }, [client?.connectionState, fetchGateway])
+
+  if (loading && !friday && channels.length === 0) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-pepper-muted animate-pulse">Loading health metrics...</div>
+        <div className="text-pepper-muted animate-pulse">Connecting to data sources...</div>
       </div>
     )
   }
 
-  if (!metrics) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-pepper-muted">Unable to fetch health metrics. Gateway may be unreachable.</div>
-      </div>
-    )
-  }
-
-  const memoryPct = Math.round((metrics.gateway.memoryMB / 1536) * 100)
-  const memoryColor = memoryPct > 80 ? 'text-red-400' : memoryPct > 60 ? 'text-yellow-400' : 'text-green-400'
+  const memoryMB = friday?.gateway.memoryMB ?? 0
+  const memoryPct = Math.round((memoryMB / 1536) * 100)
 
   return (
     <div className="space-y-6 p-4 max-w-4xl mx-auto">
@@ -170,106 +250,207 @@ export default function HealthTab({ client }: { client: OpenClawClient | null })
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-pepper-text">Gateway Health</h2>
-          <p className="text-xs text-pepper-muted">Last updated: {lastUpdated}</p>
+          <div className="flex items-center gap-2 mt-1">
+            <SourceBadge label="WS" ok={gatewayOk} />
+            <SourceBadge label="FRIDAY" ok={fridayOk} />
+            {lastUpdated && <span className="text-xs text-pepper-muted">Updated {lastUpdated}</span>}
+          </div>
         </div>
-        <ModeIndicator mode={metrics.gateway.mode} />
+        <ModeIndicator mode={friday?.gateway.mode ?? 'FULL'} />
       </div>
 
-      {/* Top-level metrics */}
+      {/* Top-level metrics (from FRIDAY) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MetricCard title="Memory" value={`${metrics.gateway.memoryMB}MB`} subtitle={`of 1536MB (${memoryPct}%)`}>
-          <div className="mt-2">
-            <div className="w-full bg-pepper-tertiary/50 rounded-full h-1.5">
-              <div
-                className={`h-1.5 rounded-full transition-all duration-500 ${
-                  memoryPct > 80 ? 'bg-red-500' : memoryPct > 60 ? 'bg-yellow-500' : 'bg-green-500'
-                }`}
-                style={{ width: `${Math.min(memoryPct, 100)}%` }}
-              />
-            </div>
-            <div className="mt-1">
-              <Sparkline data={memoryHistory} color={memoryPct > 60 ? '#f59e0b' : '#22c55e'} />
-            </div>
-          </div>
-        </MetricCard>
-
-        <MetricCard title="Error Rate" value={`${metrics.errors.rate}/min`} subtitle={`${metrics.errors.total24h} in 24h`}>
-          <div className="mt-2">
-            <Sparkline data={errorHistory} color={metrics.errors.rate > 10 ? '#ef4444' : '#8b5cf6'} />
-          </div>
-        </MetricCard>
-
-        <MetricCard title="Lane Wait" value={metrics.lanes.maxWaitMs > 1000 ? `${(metrics.lanes.maxWaitMs / 1000).toFixed(1)}s` : `${metrics.lanes.maxWaitMs}ms`} subtitle={`${metrics.lanes.blockedCount} blocks (15min)`} />
-
-        <MetricCard title="Uptime" value={metrics.gateway.uptime} subtitle={`PID ${metrics.gateway.pid}`} />
-      </div>
-
-      {/* Channel Status */}
-      <div className="bg-pepper-secondary/80 backdrop-blur-sm border border-pepper-light/10 rounded-xl p-4">
-        <h3 className="text-sm font-semibold text-pepper-text mb-3 uppercase tracking-wider">Channels</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {Object.entries(metrics.channels).map(([name, ch]) => (
-            <div key={name} className="flex items-center gap-2">
-              <StatusDot status={ch.status} />
-              <div>
-                <div className="text-sm font-medium text-pepper-text capitalize">{name}</div>
-                <div className="text-xs text-pepper-muted">{ch.detail}</div>
+        <MetricCard title="Memory" value={friday ? `${memoryMB}MB` : '--'} subtitle={friday ? `of 1536MB (${memoryPct}%)` : 'FRIDAY unreachable'}>
+          {friday && (
+            <div className="mt-2">
+              <div className="w-full bg-pepper-tertiary/50 rounded-full h-1.5">
+                <div
+                  className={`h-1.5 rounded-full transition-all duration-500 ${
+                    memoryPct > 80 ? 'bg-red-500' : memoryPct > 60 ? 'bg-yellow-500' : 'bg-green-500'
+                  }`}
+                  style={{ width: `${Math.min(memoryPct, 100)}%` }}
+                />
               </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Browser Status */}
-      <div className="bg-pepper-secondary/80 backdrop-blur-sm border border-pepper-light/10 rounded-xl p-4">
-        <h3 className="text-sm font-semibold text-pepper-text mb-3 uppercase tracking-wider">Browser Control</h3>
-        <div className="flex items-center gap-6">
-          <div>
-            <div className="text-2xl font-semibold text-pepper-text">{metrics.browser.renderers}</div>
-            <div className="text-xs text-pepper-muted">Renderers</div>
-          </div>
-          <div>
-            <div className="text-2xl font-semibold text-pepper-text">{metrics.browser.memoryMB}MB</div>
-            <div className="text-xs text-pepper-muted">Memory</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Last Briefing */}
-      <div className="bg-pepper-secondary/80 backdrop-blur-sm border border-pepper-light/10 rounded-xl p-4">
-        <h3 className="text-sm font-semibold text-pepper-text mb-3 uppercase tracking-wider">Last Briefing</h3>
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2">
-            <StatusDot status={metrics.briefing.status === 'ok' ? 'ok' : metrics.briefing.status === 'error' ? 'error' : 'warn'} />
-            <div>
-              <div className="text-sm font-medium text-pepper-text">
-                {metrics.briefing.lastRun
-                  ? new Date(metrics.briefing.lastRun).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                  : 'Never'}
+              <div className="mt-1">
+                <Sparkline data={memoryHistory} color={memoryPct > 60 ? '#f59e0b' : '#22c55e'} />
               </div>
-              <div className="text-xs text-pepper-muted">
-                {metrics.briefing.status === 'ok' ? 'Delivered' : metrics.briefing.status === 'skipped' ? 'Skipped (quiet hours)' : metrics.briefing.status}
-              </div>
-            </div>
-          </div>
-          {metrics.briefing.durationMs > 0 && (
-            <div>
-              <div className="text-sm font-medium text-pepper-text">{(metrics.briefing.durationMs / 1000).toFixed(1)}s</div>
-              <div className="text-xs text-pepper-muted">Duration</div>
             </div>
           )}
-        </div>
+        </MetricCard>
+
+        <MetricCard
+          title="Error Rate"
+          value={friday ? `${friday.errors.rate}/min` : '--'}
+          subtitle={friday ? `${friday.errors.total24h} in 24h` : ''}
+        >
+          {friday && (
+            <div className="mt-2">
+              <Sparkline data={errorHistory} color={friday.errors.rate > 10 ? '#ef4444' : '#8b5cf6'} />
+            </div>
+          )}
+        </MetricCard>
+
+        <MetricCard
+          title="Lane Wait"
+          value={friday
+            ? friday.lanes.maxWaitMs > 1000
+              ? `${(friday.lanes.maxWaitMs / 1000).toFixed(1)}s`
+              : `${friday.lanes.maxWaitMs}ms`
+            : '--'
+          }
+          subtitle={friday ? `${friday.lanes.blockedCount} blocks (15min)` : ''}
+        />
+
+        <MetricCard
+          title="Uptime"
+          value={friday?.gateway.uptime ?? '--'}
+          subtitle={friday?.gateway.pid ? `PID ${friday.gateway.pid}` : 'unknown'}
+        />
       </div>
 
-      {/* Error Categories */}
-      {Object.keys(metrics.errors.categories).length > 0 && (
+      {/* Live Channel Probes (from Gateway WebSocket) */}
+      <div className="bg-pepper-secondary/80 backdrop-blur-sm border border-pepper-light/10 rounded-xl p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <h3 className="text-sm font-semibold text-pepper-text uppercase tracking-wider">Live Channel Probes</h3>
+          <SourceBadge label="WS" ok={gatewayOk} />
+        </div>
+        {channels.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {channels.map(ch => (
+              <div key={ch.name} className="flex items-center gap-2">
+                <StatusDot status={ch.status} />
+                <div>
+                  <div className="text-sm font-medium text-pepper-text capitalize">{ch.name}</div>
+                  <div className="text-xs text-pepper-muted">{ch.detail}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-sm text-pepper-muted">
+            {gatewayOk ? 'No channel data available' : 'Gateway WebSocket not connected'}
+          </div>
+        )}
+      </div>
+
+      {/* Agent Sessions (from Gateway WebSocket) */}
+      {session && (
+        <div className="bg-pepper-secondary/80 backdrop-blur-sm border border-pepper-light/10 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <h3 className="text-sm font-semibold text-pepper-text uppercase tracking-wider">Agent Session</h3>
+            <SourceBadge label="WS" ok={gatewayOk} />
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
+            {session.model && (
+              <span className="px-2 py-1 bg-pepper-accent/20 text-pepper-accent rounded text-xs font-mono">
+                {session.model}
+              </span>
+            )}
+            {session.tokensUsed != null && session.tokenLimit != null && (
+              <div className="flex-1 min-w-[200px]">
+                <div className="flex justify-between text-xs text-pepper-muted mb-1">
+                  <span>{session.tokensUsed.toLocaleString()} tokens</span>
+                  <span>{session.tokenLimit.toLocaleString()} limit</span>
+                </div>
+                <div className="w-full bg-pepper-tertiary/50 rounded-full h-2">
+                  <div
+                    className="h-2 rounded-full bg-pepper-accent/70 transition-all duration-500"
+                    style={{ width: `${Math.min((session.tokensUsed / session.tokenLimit) * 100, 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            {session.sessionId && (
+              <span className="text-xs text-pepper-muted font-mono truncate max-w-[180px]" title={session.sessionId}>
+                {session.sessionId.slice(0, 12)}...
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Browser Status (from FRIDAY) */}
+      {friday && (
+        <div className="bg-pepper-secondary/80 backdrop-blur-sm border border-pepper-light/10 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <h3 className="text-sm font-semibold text-pepper-text uppercase tracking-wider">Browser Control</h3>
+            <SourceBadge label="FRIDAY" ok={fridayOk} />
+          </div>
+          <div className="flex items-center gap-6">
+            <div>
+              <div className="text-2xl font-semibold text-pepper-text">{friday.browser.renderers}</div>
+              <div className="text-xs text-pepper-muted">Renderers</div>
+            </div>
+            <div>
+              <div className="text-2xl font-semibold text-pepper-text">{friday.browser.memoryMB}MB</div>
+              <div className="text-xs text-pepper-muted">Memory</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Last Briefing (from FRIDAY) */}
+      {friday && (
+        <div className="bg-pepper-secondary/80 backdrop-blur-sm border border-pepper-light/10 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <h3 className="text-sm font-semibold text-pepper-text uppercase tracking-wider">Last Briefing</h3>
+            <SourceBadge label="FRIDAY" ok={fridayOk} />
+          </div>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <StatusDot status={friday.briefing.status === 'ok' ? 'ok' : friday.briefing.status === 'error' ? 'error' : 'warn'} />
+              <div>
+                <div className="text-sm font-medium text-pepper-text">
+                  {friday.briefing.lastRun
+                    ? new Date(friday.briefing.lastRun).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                    : 'Never'}
+                </div>
+                <div className="text-xs text-pepper-muted">
+                  {friday.briefing.status === 'ok' ? 'Delivered' : friday.briefing.status === 'skipped' ? 'Skipped (quiet hours)' : friday.briefing.status}
+                </div>
+              </div>
+            </div>
+            {friday.briefing.durationMs > 0 && (
+              <div>
+                <div className="text-sm font-medium text-pepper-text">{(friday.briefing.durationMs / 1000).toFixed(1)}s</div>
+                <div className="text-xs text-pepper-muted">Duration</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Watchdog (from FRIDAY) */}
+      {friday && friday.watchdog.status !== 'UNKNOWN' && (
+        <div className="bg-pepper-secondary/80 backdrop-blur-sm border border-pepper-light/10 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <h3 className="text-sm font-semibold text-pepper-text uppercase tracking-wider">Watchdog</h3>
+            <SourceBadge label="FRIDAY" ok={fridayOk} />
+          </div>
+          <div className="flex items-center gap-2">
+            <StatusDot status={friday.watchdog.status === 'HEALTHY' ? 'ok' : 'error'} />
+            <span className="text-sm font-medium text-pepper-text">{friday.watchdog.status}</span>
+          </div>
+          {friday.watchdog.issues.length > 0 && (
+            <ul className="mt-2 space-y-1">
+              {friday.watchdog.issues.map((issue, i) => (
+                <li key={i} className="text-xs text-red-400">- {issue}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Error Categories (from FRIDAY) */}
+      {friday && Object.keys(friday.errors.categories).length > 0 && (
         <div className="bg-pepper-secondary/80 backdrop-blur-sm border border-pepper-light/10 rounded-xl p-4">
           <h3 className="text-sm font-semibold text-pepper-text mb-3 uppercase tracking-wider">Error Breakdown (24h)</h3>
           <div className="space-y-2">
-            {Object.entries(metrics.errors.categories)
+            {Object.entries(friday.errors.categories)
               .sort(([, a], [, b]) => b - a)
               .map(([category, count]) => {
-                const pct = metrics.errors.total24h > 0 ? (count / metrics.errors.total24h) * 100 : 0
+                const pct = friday.errors.total24h > 0 ? (count / friday.errors.total24h) * 100 : 0
                 return (
                   <div key={category} className="flex items-center gap-3">
                     <div className="w-28 text-xs text-pepper-muted truncate">{category}</div>

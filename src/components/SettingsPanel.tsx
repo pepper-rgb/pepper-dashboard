@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 interface SettingsPanelProps {
   isOpen: boolean
@@ -31,15 +31,15 @@ interface Settings {
 // Format phone number for display: +19043076970 -> +1 904-307-6970
 function formatPhoneDisplay(phone: string): string {
   const digits = phone.replace(/\D/g, '')
-  
+
   if (digits.length === 11 && digits.startsWith('1')) {
     return `+1 ${digits.slice(1, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`
   }
-  
+
   if (digits.length === 10) {
     return `+1 ${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
   }
-  
+
   return phone
 }
 
@@ -56,41 +56,60 @@ const knownContacts: Record<string, string> = {
 
 export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPanelProps) {
   const [settings, setSettings] = useState<Settings | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(false)
   const [newPhoneNumber, setNewPhoneNumber] = useState('')
   const [isAddingNumber, setIsAddingNumber] = useState(false)
   const [removingNumber, setRemovingNumber] = useState<string | null>(null)
+  const onToastRef = useRef(onToast)
+  const loadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Fetch settings
+  // Keep ref in sync
+  useEffect(() => {
+    onToastRef.current = onToast
+  }, [onToast])
+
+  // Fetch settings — no onToast in deps, uses ref
   const fetchSettings = useCallback(async () => {
-    try {
+    // Delayed loading: only show spinner if fetch takes >200ms
+    let showLoading = false
+    loadingTimerRef.current = setTimeout(() => {
+      showLoading = true
       setIsLoading(true)
+    }, 200)
+
+    try {
       const response = await fetch('/api/settings')
       const data = await response.json()
-      
+
       if (data.status === 'success') {
         setSettings(data.settings)
       } else {
-        onToast('Failed to load settings', 'error')
+        onToastRef.current('Failed to load settings', 'error')
       }
     } catch (error) {
       console.error('Failed to fetch settings:', error)
-      onToast('Failed to load settings', 'error')
+      onToastRef.current('Failed to load settings', 'error')
     } finally {
+      if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current)
+      if (showLoading) setIsLoading(false)
+      // Always clear loading if it was set
       setIsLoading(false)
     }
-  }, [onToast])
+  }, [])
 
   useEffect(() => {
     if (isOpen) {
       fetchSettings()
+    }
+    return () => {
+      if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current)
     }
   }, [isOpen, fetchSettings])
 
   // Add phone number to allowlist
   const handleAddNumber = async () => {
     if (!newPhoneNumber.trim()) return
-    
+
     setIsAddingNumber(true)
     try {
       const response = await fetch('/api/settings/allowlist', {
@@ -101,22 +120,22 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
           phoneNumber: newPhoneNumber.trim()
         })
       })
-      
+
       const data = await response.json()
-      
+
       if (data.status === 'success') {
         setSettings(prev => prev ? {
           ...prev,
           imessage: { ...prev.imessage, allowFrom: data.allowFrom }
         } : null)
         setNewPhoneNumber('')
-        onToast('Phone number added to allowlist', 'success')
+        onToastRef.current('Phone number added to allowlist', 'success')
       } else {
-        onToast(data.error || 'Failed to add phone number', 'error')
+        onToastRef.current(data.error || 'Failed to add phone number', 'error')
       }
     } catch (error) {
       console.error('Failed to add number:', error)
-      onToast('Failed to add phone number', 'error')
+      onToastRef.current('Failed to add phone number', 'error')
     } finally {
       setIsAddingNumber(false)
     }
@@ -134,21 +153,21 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
           phoneNumber
         })
       })
-      
+
       const data = await response.json()
-      
+
       if (data.status === 'success') {
         setSettings(prev => prev ? {
           ...prev,
           imessage: { ...prev.imessage, allowFrom: data.allowFrom }
         } : null)
-        onToast('Phone number removed from allowlist', 'success')
+        onToastRef.current('Phone number removed from allowlist', 'success')
       } else {
-        onToast(data.error || 'Failed to remove phone number', 'error')
+        onToastRef.current(data.error || 'Failed to remove phone number', 'error')
       }
     } catch (error) {
       console.error('Failed to remove number:', error)
-      onToast('Failed to remove phone number', 'error')
+      onToastRef.current('Failed to remove phone number', 'error')
     } finally {
       setRemovingNumber(null)
     }
@@ -165,11 +184,11 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
   return (
     <>
       {/* Backdrop */}
-      <div 
+      <div
         className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
         onClick={onClose}
       />
-      
+
       {/* Settings Panel */}
       <div className={`
         fixed right-0 top-0 h-full w-full sm:w-[420px] z-50
@@ -187,7 +206,7 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
             <h3 className="font-semibold text-pepper-text">Settings</h3>
             <p className="text-xs text-pepper-muted">Manage allowlist & gateway</p>
           </div>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 rounded-lg hover:bg-pepper-light/20 text-pepper-muted hover:text-pepper-text transition-colors"
           >
@@ -284,8 +303,8 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
                     <span className="text-sm text-pepper-muted">Connection</span>
                     <div className="flex items-center gap-2">
                       <span className={`w-2 h-2 rounded-full ${
-                        settings.gateway.status === 'connected' 
-                          ? 'bg-emerald-500' 
+                        settings.gateway.status === 'connected'
+                          ? 'bg-emerald-500'
                           : 'bg-amber-500'
                       }`} />
                       <span className={`text-sm font-medium ${
@@ -297,7 +316,7 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
                       </span>
                     </div>
                   </div>
-                  
+
                   {/* Gateway URL */}
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-pepper-muted">Gateway URL</span>
@@ -305,19 +324,19 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
                       {settings.gateway.url}
                     </code>
                   </div>
-                  
+
                   {/* Mode */}
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-pepper-muted">Mode</span>
                     <span className="text-sm text-pepper-text capitalize">{settings.gateway.mode}</span>
                   </div>
-                  
+
                   {/* Tailscale */}
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-pepper-muted">Tailscale</span>
                     <span className={`text-sm ${
-                      settings.tailscale.enabled 
-                        ? 'text-emerald-400' 
+                      settings.tailscale.enabled
+                        ? 'text-emerald-400'
                         : 'text-pepper-muted'
                     }`}>
                       {settings.tailscale.enabled ? 'Enabled' : 'Disabled'}
@@ -410,7 +429,7 @@ export default function SettingsPanel({ isOpen, onClose, onToast }: SettingsPane
                     </div>
                   ) : (
                     settings.imessage.allowFrom.map((phone) => (
-                      <div 
+                      <div
                         key={phone}
                         className="
                           bg-pepper-tertiary rounded-xl p-3 border border-pepper-light/10

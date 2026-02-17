@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 
+export const dynamic = 'force-dynamic'
+
 const execAsync = promisify(exec)
 
 interface CalendarEvent {
@@ -18,7 +20,7 @@ interface CalendarEvent {
 export async function GET() {
   try {
     // Try to get calendar events from gog CLI
-    const { stdout, stderr } = await execAsync('gog calendar events --limit 10 --json', {
+    const { stdout, stderr } = await execAsync('gog calendar events --account fitz@flightsuite.ai --limit 10 --json', {
       timeout: 10000
     })
     
@@ -26,8 +28,9 @@ export async function GET() {
       console.error('gog stderr:', stderr)
     }
     
-    const events = JSON.parse(stdout)
-    
+    const parsed = JSON.parse(stdout)
+    const events = Array.isArray(parsed) ? parsed : (parsed.events || [])
+
     // Transform and sort events
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const transformedEvents: CalendarEvent[] = events.map((event: any) => ({

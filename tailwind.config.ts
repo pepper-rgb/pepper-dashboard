@@ -43,6 +43,7 @@ const config: Config = {
         'pulse-slow': 'pulse 3s ease-in-out infinite',
         'glow': 'glow 2s ease-in-out infinite alternate',
         'sheet-up': 'sheetUp 0.3s ease-out',
+        'tab-enter': 'tabEnter 0.2s ease-out',
       },
       keyframes: {
         sheetUp: {
@@ -60,6 +61,10 @@ const config: Config = {
         glow: {
           '0%': { boxShadow: '0 0 20px rgba(139, 92, 246, 0.2)' },
           '100%': { boxShadow: '0 0 30px rgba(139, 92, 246, 0.4)' },
+        },
+        tabEnter: {
+          '0%': { opacity: '0', transform: 'translateY(8px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
         },
       },
     },

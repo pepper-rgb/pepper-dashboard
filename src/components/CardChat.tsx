@@ -22,18 +22,27 @@ export default function CardChat({ sessionKey, client, cardContext, isVisible }:
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [streamingText, setStreamingText] = useState<string | null>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const chatContainerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const hasContextSent = useRef(false)
   const activeSessionRef = useRef<string | null>(null)
+  const isInitialLoad = useRef(true)
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }
+  const scrollToBottom = useCallback(() => {
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
+    scrollTimerRef.current = setTimeout(() => {
+      if (chatContainerRef.current) {
+        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
+      }
+    }, 100)
+  }, [])
 
+  // Scroll on new messages or streaming, but skip initial history load
   useEffect(() => {
+    if (isInitialLoad.current) return
     scrollToBottom()
-  }, [messages, streamingText])
+  }, [messages, streamingText, scrollToBottom])
 
   // Switch session and register callbacks when this card chat becomes visible
   useEffect(() => {
@@ -41,9 +50,11 @@ export default function CardChat({ sessionKey, client, cardContext, isVisible }:
     if (activeSessionRef.current === sessionKey) return
 
     activeSessionRef.current = sessionKey
+    isInitialLoad.current = true
 
     client.setCallbacks({
       onChatStream: (text) => {
+        isInitialLoad.current = false
         setStreamingText(text)
         setIsLoading(false)
       },
@@ -74,8 +85,11 @@ export default function CardChat({ sessionKey, client, cardContext, isVisible }:
         if (mapped.length > 0) {
           hasContextSent.current = true
         }
+        // Allow future scrolls after initial load completes
+        setTimeout(() => { isInitialLoad.current = false }, 150)
       },
       onChatError: (error) => {
+        isInitialLoad.current = false
         setStreamingText(null)
         setIsLoading(false)
         setMessages(prev => [...prev, {
@@ -97,6 +111,13 @@ export default function CardChat({ sessionKey, client, cardContext, isVisible }:
     }
   }, [isVisible])
 
+  // Cleanup scroll timer
+  useEffect(() => {
+    return () => {
+      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
+    }
+  }, [])
+
   const sendMessage = useCallback(async (messageText?: string) => {
     const textToSend = messageText || input.trim()
     if (!textToSend || isLoading || !client) return
@@ -115,6 +136,7 @@ export default function CardChat({ sessionKey, client, cardContext, isVisible }:
       timestamp: new Date()
     }
 
+    isInitialLoad.current = false
     setMessages(prev => [...prev, userMessage])
     setInput('')
     setIsLoading(true)
@@ -143,9 +165,19 @@ export default function CardChat({ sessionKey, client, cardContext, isVisible }:
   if (!isVisible) return null
 
   return (
-    <div className="mt-3 border-t border-pepper-light/10 pt-3">
+    <div className="mt-3 pt-3 border-t border-pepper-accent/20">
+      {/* Section header */}
+      <div className="flex items-center gap-2 mb-2">
+        <div className="w-5 h-5 rounded-md bg-pepper-accent/20 flex items-center justify-center">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-pepper-accent">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+        </div>
+        <span className="text-xs font-semibold text-pepper-accent">Ask Pepper</span>
+      </div>
+
       {/* Message history */}
-      <div className="max-h-48 overflow-y-auto space-y-2 mb-2">
+      <div ref={chatContainerRef} className="max-h-48 overflow-y-auto space-y-2 mb-2">
         {messages.length === 0 && !streamingText && !isLoading && (
           <p className="text-xs text-pepper-muted text-center py-2">
             Ask Pepper about this item...
@@ -191,8 +223,6 @@ export default function CardChat({ sessionKey, client, cardContext, isVisible }:
             </div>
           </div>
         )}
-
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Input */}

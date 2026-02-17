@@ -43,10 +43,21 @@ interface Task {
 
 // Parse the todo markdown file with context extraction
 async function parseMemoryTodo(): Promise<Task[]> {
+  const memoryDir = path.join(WORKSPACE_PATH, 'memory')
   const today = new Date().toISOString().split('T')[0]
-  const todoPath = path.join(WORKSPACE_PATH, 'memory', `todo-${today}.md`)
-  
+  let todoPath = path.join(memoryDir, `todo-${today}.md`)
+
   try {
+    // Try today's file first, then fall back to most recent todo file
+    try {
+      await fs.access(todoPath)
+    } catch {
+      const files = await fs.readdir(memoryDir)
+      const todoFiles = files.filter(f => f.startsWith('todo-') && f.endsWith('.md')).sort().reverse()
+      if (todoFiles.length > 0) {
+        todoPath = path.join(memoryDir, todoFiles[0])
+      }
+    }
     const content = await fs.readFile(todoPath, 'utf-8')
     const tasks: Task[] = []
     

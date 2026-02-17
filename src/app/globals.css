@@ -8,6 +8,7 @@
   --background-end: #0f0f18;
   --accent-purple: #8b5cf6;
   --accent-purple-light: #a78bfa;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 * {
@@ -48,7 +49,7 @@ body::before {
   left: 0;
   right: 0;
   bottom: 0;
-  background: 
+  background:
     radial-gradient(ellipse 80% 50% at 50% -20%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
     radial-gradient(ellipse 60% 40% at 100% 50%, rgba(120, 119, 198, 0.08) 0%, transparent 50%),
     radial-gradient(ellipse 50% 50% at 0% 100%, rgba(139, 92, 246, 0.1) 0%, transparent 50%);
@@ -59,6 +60,11 @@ body::before {
 main {
   position: relative;
   z-index: 1;
+}
+
+/* Safe area bottom for iOS */
+.safe-area-bottom {
+  padding-bottom: max(0px, var(--safe-area-bottom));
 }
 
 /* Glass card effect */
@@ -73,7 +79,7 @@ main {
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid rgba(139, 92, 246, 0.1);
   border-radius: 16px;
-  box-shadow: 
+  box-shadow:
     0 4px 24px rgba(0, 0, 0, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
   transition: all 0.3s ease;
@@ -91,7 +97,7 @@ main {
 
 .glass-card:hover {
   border-color: rgba(139, 92, 246, 0.2);
-  box-shadow: 
+  box-shadow:
     0 8px 32px rgba(0, 0, 0, 0.4),
     0 0 0 1px rgba(139, 92, 246, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
@@ -298,10 +304,14 @@ button:focus-visible {
     transform: none;
     background: rgba(26, 26, 37, 0.5);
   }
-  
+
   .list-item:active {
     background: rgba(26, 26, 37, 0.8);
     transform: scale(0.98);
+  }
+
+  .glass-card:hover {
+    transform: none;
   }
 }
 
@@ -391,4 +401,20 @@ button:focus-visible {
 
 .animate-sheet-up {
   animation: sheet-up 0.3s ease-out;
+}
+
+/* Tab transition */
+@keyframes tab-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-tab-enter {
+  animation: tab-enter 0.2s ease-out;
 }

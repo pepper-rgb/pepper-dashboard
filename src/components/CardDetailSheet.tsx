@@ -12,8 +12,10 @@ interface CardDetailSheetProps {
 export default function CardDetailSheet({ isOpen, onClose, title, children }: CardDetailSheetProps) {
   const [isMobile, setIsMobile] = useState(false)
   const sheetRef = useRef<HTMLDivElement>(null)
+  const dragHandleRef = useRef<HTMLDivElement>(null)
   const dragStartY = useRef<number | null>(null)
   const currentTranslate = useRef(0)
+  const isDragHandle = useRef(false)
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 1024)
@@ -41,11 +43,18 @@ export default function CardDetailSheet({ isOpen, onClose, title, children }: Ca
   }, [isOpen, onClose])
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    dragStartY.current = e.touches[0].clientY
+    const target = e.target as HTMLElement
+    if (dragHandleRef.current && (dragHandleRef.current === target || dragHandleRef.current.contains(target))) {
+      isDragHandle.current = true
+      dragStartY.current = e.touches[0].clientY
+    } else {
+      isDragHandle.current = false
+      dragStartY.current = null
+    }
   }
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (dragStartY.current === null || !sheetRef.current) return
+    if (!isDragHandle.current || dragStartY.current === null || !sheetRef.current) return
     const delta = e.touches[0].clientY - dragStartY.current
     if (delta > 0) {
       currentTranslate.current = delta
@@ -54,7 +63,10 @@ export default function CardDetailSheet({ isOpen, onClose, title, children }: Ca
   }
 
   const handleTouchEnd = () => {
-    if (!sheetRef.current) return
+    if (!isDragHandle.current || !sheetRef.current) {
+      isDragHandle.current = false
+      return
+    }
     if (currentTranslate.current > 120) {
       onClose()
     } else {
@@ -62,13 +74,18 @@ export default function CardDetailSheet({ isOpen, onClose, title, children }: Ca
     }
     dragStartY.current = null
     currentTranslate.current = 0
+    isDragHandle.current = false
   }
 
   if (!isOpen) return null
 
-  // Desktop: render inline (caller wraps in card expand area)
+  // Desktop: render inline — stop propagation so parent onClick doesn't fire
   if (!isMobile) {
-    return <div className="mt-3">{children}</div>
+    return (
+      <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+        {children}
+      </div>
+    )
   }
 
   // Mobile: full-screen bottom sheet
@@ -77,21 +94,25 @@ export default function CardDetailSheet({ isOpen, onClose, title, children }: Ca
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 animate-fade-in"
-        onClick={onClose}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
       />
 
-      {/* Sheet */}
+      {/* Sheet — stopPropagation prevents parent list item onClick from firing */}
       <div
         ref={sheetRef}
         className="fixed inset-x-0 bottom-0 z-50 animate-sheet-up"
         style={{ maxHeight: '90vh' }}
+        onClick={(e) => e.stopPropagation()}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
         <div className="bg-pepper-secondary rounded-t-2xl border-t border-x border-pepper-light/20 flex flex-col" style={{ maxHeight: '90vh' }}>
           {/* Drag handle */}
-          <div className="flex justify-center pt-3 pb-2 flex-shrink-0">
+          <div ref={dragHandleRef} className="flex justify-center pt-3 pb-2 flex-shrink-0 cursor-grab active:cursor-grabbing">
             <div className="w-10 h-1 rounded-full bg-pepper-light/40" />
           </div>
 

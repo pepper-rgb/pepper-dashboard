@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { promises as fs } from 'fs'
 import path from 'path'
 
+export const dynamic = 'force-dynamic'
+
 const CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH || '/Users/pepperstarke/.openclaw/openclaw.json'
 const OPENCLAW_GATEWAY = process.env.OPENCLAW_GATEWAY_URL || 'http://localhost:18789'
 const OPENCLAW_PASSWORD = process.env.OPENCLAW_PASSWORD || 'PepperDash2026!'
